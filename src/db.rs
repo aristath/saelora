@@ -8,7 +8,6 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -54,14 +53,6 @@ impl Manager {
         self.root().join("users").join("users.db")
     }
 
-    #[allow(dead_code)]
-    pub fn user_db_path(&self, user_id: &str) -> PathBuf {
-        self.root()
-            .join("users")
-            .join("db")
-            .join(format!("{}.db", user_id.trim()))
-    }
-
     pub fn waitlist_path(&self) -> PathBuf {
         self.root().join("users").join("waitlist.jsonl")
     }
@@ -83,22 +74,6 @@ impl Manager {
         let mut conn = open_sqlite(&path)?;
         migrate_users(&mut conn)?;
         Ok(UsersStore { conn })
-    }
-
-    #[allow(dead_code)]
-    pub fn user(&self, user_id: &str) -> Result<UserStore, DbError> {
-        let path = self.user_db_path(user_id);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-            }
-        }
-        let mut conn = open_sqlite(&path)?;
-        migrate_user(&mut conn)?;
-        Ok(UserStore { conn })
     }
 
     pub fn waitlist_add(&self, email: &str) -> Result<(), DbError> {
@@ -399,12 +374,6 @@ pub struct UsersStore {
     conn: Connection,
 }
 
-#[allow(dead_code)]
-pub struct UserStore {
-    #[allow(dead_code)]
-    conn: Connection,
-}
-
 impl UsersStore {
     pub fn user_id_status_by_email(
         &self,
@@ -486,7 +455,6 @@ impl UsersStore {
         }
     }
 
-    #[allow(dead_code)]
     pub fn has_user(&self, email: &str) -> Result<bool, DbError> {
         let e = email.trim();
         if e.is_empty() {
@@ -506,7 +474,7 @@ impl UsersStore {
         Ok(n.max(0) as usize)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn count_magic_tokens(&self) -> Result<usize, DbError> {
         let n: i64 = self
             .conn
@@ -1051,37 +1019,6 @@ fn verify_password(password: &str, hash: &str) -> bool {
     Argon2::default()
         .verify_password(password.as_bytes(), &ph)
         .is_ok()
-}
-
-#[allow(dead_code)]
-pub fn ct_eq(a: &str, b: &str) -> bool {
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
-
-// Legacy stub kept for per-user DBs if ever used again.
-#[allow(dead_code)]
-fn migrate_user(conn: &mut Connection) -> Result<(), DbError> {
-    let stmts = [
-        r#"CREATE TABLE IF NOT EXISTS conversations (
-			id TEXT PRIMARY KEY,
-			created_at INTEGER NOT NULL,
-			title TEXT
-		);"#,
-        r#"CREATE TABLE IF NOT EXISTS messages (
-			id TEXT PRIMARY KEY,
-			conversation_id TEXT NOT NULL,
-			speaker TEXT NOT NULL CHECK (speaker IN ('user','saelora')),
-			content TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-		);"#,
-        r#"CREATE INDEX IF NOT EXISTS messages_conversation_id_idx ON messages(conversation_id);"#,
-        r#"CREATE INDEX IF NOT EXISTS messages_created_at_idx ON messages(created_at);"#,
-    ];
-    for s in stmts {
-        conn.execute_batch(s)?;
-    }
-    Ok(())
 }
 
 fn now_ms() -> i64 {
