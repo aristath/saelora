@@ -1338,6 +1338,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auth_me_and_logout_require_token() {
+        let td = tempfile::tempdir().unwrap();
+        let data_dir = td.path().to_path_buf();
+        let st = test_state(&data_dir);
+
+        assert_eq!(
+            auth_me(State(st.clone()), HeaderMap::new()).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            auth_logout(State(st.clone()), HeaderMap::new())
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn bearer_token_parsing_is_case_insensitive_and_trims() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_static("bEaReR   abc123  "),
+        );
+        assert_eq!(bearer_token(&h).as_deref(), Some("abc123"));
+
+        let mut h2 = HeaderMap::new();
+        h2.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_static("Token abc123"),
+        );
+        assert!(bearer_token(&h2).is_none());
+    }
+
+    #[tokio::test]
     async fn request_password_link_ok_does_not_leak_url_or_create_user() {
         let td = tempfile::tempdir().unwrap();
         let data_dir = td.path().to_path_buf();
@@ -1454,6 +1489,33 @@ mod tests {
                 .and_then(|m| m.as_str()),
             Some("you are on the waitlist")
         );
+    }
+
+    #[tokio::test]
+    async fn register_validates_email_and_password() {
+        let td = tempfile::tempdir().unwrap();
+        let data_dir = td.path().to_path_buf();
+        let st = test_state(&data_dir);
+
+        // Invalid JSON.
+        let resp1 = auth_register(State(st.clone()), Bytes::from("{")).await;
+        assert_eq!(resp1.status(), StatusCode::BAD_REQUEST);
+
+        // Invalid email.
+        let resp2 = auth_register(
+            State(st.clone()),
+            Bytes::from(r#"{"email":"nope","password":"password123"}"#),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::BAD_REQUEST);
+
+        // Short password.
+        let resp3 = auth_register(
+            State(st.clone()),
+            Bytes::from(r#"{"email":"a@example.com","password":"short"}"#),
+        )
+        .await;
+        assert_eq!(resp3.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1597,6 +1659,34 @@ mod tests {
         .await;
         assert_eq!(resp3.status(), StatusCode::OK);
         assert_eq!(mgr.users().unwrap().count_magic_tokens().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn request_password_link_for_existing_active_user_creates_token() {
+        let td = tempfile::tempdir().unwrap();
+        let data_dir = td.path().to_path_buf();
+        let st = test_state(&data_dir);
+
+        let mgr = db::Manager::new(data_dir.clone());
+        let us = mgr.users().unwrap();
+        let ph = db::hash_password("password123").unwrap();
+        let _uid = us.create_user("active@example.com", &ph, "active").unwrap();
+        assert_eq!(us.count_users().unwrap(), 1);
+        assert_eq!(us.count_magic_tokens().unwrap(), 0);
+
+        let resp = auth_request_password_link(
+            State(st.clone()),
+            Bytes::from(r#"{"email":"active@example.com"}"#),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = resp_json(resp).await;
+        assert_eq!(v.get("ok").and_then(|b| b.as_bool()), Some(true));
+        assert!(v.get("url").is_none());
+
+        let us2 = mgr.users().unwrap();
+        assert_eq!(us2.count_users().unwrap(), 1);
+        assert_eq!(us2.count_magic_tokens().unwrap(), 1);
     }
 
     #[tokio::test]
