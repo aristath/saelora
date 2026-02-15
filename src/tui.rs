@@ -2881,3 +2881,188 @@ fn col_at_x(s: &str, start_col: usize, end_col: usize, want_x: usize) -> usize {
     }
     col
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_app() -> App {
+        App {
+            data_dir: PathBuf::new(),
+            screen: Screen::Menu,
+            win_w: 0,
+            win_h: 0,
+            menu_idx: 0,
+            invites_n: 0,
+            whitelist_n: 0,
+            users_n: 0,
+            msgs_sent: 0,
+            msgs_recv: 0,
+            focus: 0,
+            api_key: String::new(),
+            model: String::new(),
+            base_url: String::new(),
+            http_referer: String::new(),
+            x_title: String::new(),
+            mail_api_key: String::new(),
+            mail_api_secret: String::new(),
+            mail_from_email: String::new(),
+            mail_from_name: String::new(),
+            mail_base_url: String::new(),
+            public_base: String::new(),
+            system_prompt: PromptEditor::from_text("", ""),
+            info: String::new(),
+            err: String::new(),
+            loading_models: false,
+            models: vec![],
+            models_state: TableState::default(),
+            sort_col: 0,
+            sort_asc: true,
+            loading_waitlist: false,
+            waitlist: vec![],
+            waitlist_state: TableState::default(),
+            whitelist: vec![],
+            whitelist_state: TableState::default(),
+            loading_users: false,
+            users: vec![],
+            users_state: TableState::default(),
+            agents: vec![],
+            agents_state: TableState::default(),
+            agent_focus: 0,
+            task_chat: String::new(),
+            task_summary: String::new(),
+            agent_modal: false,
+            agent_modal_idx: None,
+            agent_models: vec![],
+            model_picker: false,
+            model_picker_idx: 0,
+            loading_agent_models: false,
+        }
+    }
+
+    fn model(id: &str, ctx: i64, prompt: &str, req: &str) -> openrouter::Model {
+        openrouter::Model {
+            id: id.to_string(),
+            name: String::new(),
+            description: String::new(),
+            context_length: ctx,
+            pricing: openrouter::Pricing {
+                prompt: prompt.to_string(),
+                request: req.to_string(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn apply_sort_sorts_numeric_columns_desc_by_default_and_toggles() {
+        let mut app = empty_app();
+        app.models = vec![
+            model("a", 8, "0.01", "0.0"),
+            model("b", 32, "0.02", "0.0"),
+            model("c", 16, "0.03", "0.0"),
+        ];
+
+        // Column 1 = context length, defaults to descending.
+        apply_sort(&mut app, 1);
+        assert_eq!(app.sort_col, 1);
+        assert!(!app.sort_asc);
+        assert_eq!(app.models[0].context_length, 32);
+        assert_eq!(app.models[1].context_length, 16);
+        assert_eq!(app.models[2].context_length, 8);
+
+        // Toggle same column -> ascending.
+        apply_sort(&mut app, 1);
+        assert!(app.sort_asc);
+        assert_eq!(app.models[0].context_length, 8);
+        assert_eq!(app.models[2].context_length, 32);
+    }
+
+    #[test]
+    fn apply_sort_sorts_costs_and_keeps_numeric_before_empty() {
+        let mut app = empty_app();
+        app.models = vec![
+            model("x", 0, "0.002", ""),
+            model("y", 0, "0.0001", ""),
+            model("z", 0, "", ""),
+        ];
+
+        // Column 2 = prompt cost, defaults to descending.
+        apply_sort(&mut app, 2);
+        assert_eq!(app.models[0].id, "x");
+        assert_eq!(app.models[1].id, "y");
+        assert_eq!(app.models[2].id, "z"); // empty/non-numeric goes last
+    }
+
+    #[test]
+    fn validate_agents_enforces_required_fields_and_uniqueness() {
+        let mut app = empty_app();
+
+        // Missing name.
+        app.agents = vec![config::Agent {
+            name: "".to_string(),
+            provider: config::Provider::OpenRouter,
+            model: "m".to_string(),
+            base_url: String::new(),
+            api_key: "k".to_string(),
+            http_referer: String::new(),
+            x_title: String::new(),
+        }];
+        assert!(!validate_agents(&mut app));
+        assert_eq!(app.err, "agent name is required");
+
+        // Missing model.
+        app.agents[0].name = "a".to_string();
+        app.agents[0].model.clear();
+        assert!(!validate_agents(&mut app));
+        assert_eq!(app.err, "a: model is required");
+
+        // Duplicate names.
+        app.agents = vec![
+            config::Agent {
+                name: "dup".to_string(),
+                provider: config::Provider::OpenRouter,
+                model: "m".to_string(),
+                base_url: String::new(),
+                api_key: "k".to_string(),
+                http_referer: String::new(),
+                x_title: String::new(),
+            },
+            config::Agent {
+                name: "dup".to_string(),
+                provider: config::Provider::Ollama,
+                model: "m2".to_string(),
+                base_url: String::new(),
+                api_key: String::new(),
+                http_referer: String::new(),
+                x_title: String::new(),
+            },
+        ];
+        assert!(!validate_agents(&mut app));
+        assert_eq!(app.err, "duplicate agent name: dup");
+
+        // OpenRouter agents must have API key; Ollama agents may omit it.
+        app.agents = vec![config::Agent {
+            name: "or".to_string(),
+            provider: config::Provider::OpenRouter,
+            model: "m".to_string(),
+            base_url: String::new(),
+            api_key: "".to_string(),
+            http_referer: String::new(),
+            x_title: String::new(),
+        }];
+        assert!(!validate_agents(&mut app));
+        assert_eq!(app.err, "or: API key required for OpenRouter");
+
+        app.agents = vec![config::Agent {
+            name: "ol".to_string(),
+            provider: config::Provider::Ollama,
+            model: "m".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            api_key: "".to_string(),
+            http_referer: String::new(),
+            x_title: String::new(),
+        }];
+        assert!(validate_agents(&mut app));
+    }
+}
