@@ -221,3 +221,72 @@ pub fn save_settings(path: &Path, s: &Settings) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_public_base_normalizes_scheme() {
+        let mut s = default_settings();
+        s.public_base = "".to_string();
+        assert_eq!(s.http_public_base(), "");
+
+        s.public_base = "saelora.ai".to_string();
+        assert_eq!(s.http_public_base(), "https://saelora.ai");
+
+        s.public_base = "http://localhost:8080".to_string();
+        assert_eq!(s.http_public_base(), "http://localhost:8080");
+    }
+
+    #[test]
+    fn agent_openai_base_url_adds_scheme_and_ollama_v1() {
+        let a = Agent {
+            name: "o".to_string(),
+            provider: Provider::OpenRouter,
+            model: "x".to_string(),
+            base_url: "openrouter.ai/api/v1/".to_string(),
+            api_key: String::new(),
+            http_referer: String::new(),
+            x_title: String::new(),
+        };
+        assert_eq!(a.openai_base_url(), "https://openrouter.ai/api/v1");
+
+        let o = Agent {
+            name: "ol".to_string(),
+            provider: Provider::Ollama,
+            model: "x".to_string(),
+            base_url: "192.168.1.9:11434".to_string(),
+            api_key: String::new(),
+            http_referer: String::new(),
+            x_title: String::new(),
+        };
+        assert_eq!(o.openai_base_url(), "http://192.168.1.9:11434/v1");
+
+        let o2 = Agent {
+            base_url: "http://localhost:11434/v1/".to_string(),
+            ..o
+        };
+        assert_eq!(o2.openai_base_url(), "http://localhost:11434/v1");
+        assert_eq!(o2.ollama_root_url(), "http://localhost:11434");
+    }
+
+    #[test]
+    fn settings_save_load_roundtrip() {
+        let td = tempfile::tempdir().unwrap();
+        let path = settings_path(td.path());
+
+        let mut s = default_settings();
+        s.public_base = "https://saelora.ai".to_string();
+        s.openrouter.model = "x-ai/grok-4.1-fast".to_string();
+        s.chat.system_prompt = "hello".to_string();
+
+        save_settings(&path, &s).unwrap();
+        let s2 = load_settings(&path).unwrap();
+
+        assert_eq!(s2.public_base, "https://saelora.ai");
+        assert_eq!(s2.openrouter.model, "x-ai/grok-4.1-fast");
+        assert_eq!(s2.chat.system_prompt, "hello");
+        assert!(!s2.agents.is_empty());
+    }
+}

@@ -116,3 +116,28 @@ fn clean_path(raw: &str) -> String {
     }
     path
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_path_normalizes_slashes_and_strips_leading_and_trailing() {
+        assert_eq!(clean_path("/app/"), "app");
+        assert_eq!(clean_path("app///"), "app");
+        assert_eq!(clean_path("app\\index.html"), "app/index.html");
+        assert_eq!(clean_path("/app/index.html"), "app/index.html");
+    }
+
+    #[test]
+    fn unsafe_path_rejects_dotfiles_and_parent_segments() {
+        assert!(is_unsafe_path("../etc/passwd"));
+        assert!(is_unsafe_path("a/../b"));
+        assert!(is_unsafe_path(".env"));
+        assert!(is_unsafe_path("a/.env"));
+        assert!(is_unsafe_path("a/.well-known/thing"));
+
+        assert!(!is_unsafe_path("app.js"));
+        assert!(!is_unsafe_path("assets/app.css"));
+    }
+}

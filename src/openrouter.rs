@@ -409,3 +409,45 @@ impl std::fmt::Display for HttpError {
 }
 
 impl std::error::Error for HttpError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pricing_deserializes_from_object_or_array() {
+        let one = r#"{
+            "id":"m",
+            "name":"n",
+            "description":"d",
+            "context_length":123,
+            "pricing":{"prompt":"0.000001","completion":"0.000002","request":"0.01","image":"","input_cache_read":"0.0","input_cache_write":"0.0"}
+        }"#;
+        let m1: Model = serde_json::from_str(one).unwrap();
+        assert_eq!(m1.pricing.prompt, "0.000001");
+        assert_eq!(m1.pricing.completion, "0.000002");
+        assert_eq!(m1.pricing.request, "0.01");
+
+        let many = r#"{
+            "id":"m",
+            "name":"n",
+            "description":"d",
+            "context_length":123,
+            "pricing":[{"prompt":"0.1","completion":"0.2","request":"0.3","image":"","input_cache_read":"0.4","input_cache_write":"0.5"}]
+        }"#;
+        let m2: Model = serde_json::from_str(many).unwrap();
+        assert_eq!(m2.pricing.prompt, "0.1");
+        assert_eq!(m2.pricing.input_cache_write, "0.5");
+    }
+
+    #[test]
+    fn http_error_from_api_parses_openai_envelope() {
+        let body = br#"{"error":{"message":"no auth","type":"invalid_request_error","code":"unauthorized"}}"#;
+        let e = HttpError::from_api(StatusCode::UNAUTHORIZED, body);
+        assert_eq!(e.status, Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(e.message, "no auth");
+        assert_eq!(e.r#type, "invalid_request_error");
+        assert_eq!(e.code, "unauthorized");
+        assert!(e.transport.is_none());
+    }
+}

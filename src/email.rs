@@ -117,3 +117,52 @@ fn resolve_endpoint(cfg: &config::MailjetSettings) -> (String, bool) {
     }
     (MAILJET_DEFAULT_ENDPOINT.to_string(), true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_endpoint_defaults_and_normalizes() {
+        let cfg = config::MailjetSettings::default();
+        let (url, fell_back) = resolve_endpoint(&cfg);
+        assert_eq!(url, MAILJET_DEFAULT_ENDPOINT);
+        assert!(!fell_back);
+
+        let cfg2 = config::MailjetSettings {
+            base_url: "api.mailjet.com".to_string(),
+            ..Default::default()
+        };
+        let (url2, fell_back2) = resolve_endpoint(&cfg2);
+        assert_eq!(url2, "https://api.mailjet.com/v3.1/send");
+        assert!(!fell_back2);
+
+        let cfg3 = config::MailjetSettings {
+            base_url: "https://api.mailjet.com/v3.1/send".to_string(),
+            ..Default::default()
+        };
+        let (url3, fell_back3) = resolve_endpoint(&cfg3);
+        assert_eq!(url3, "https://api.mailjet.com/v3.1/send");
+        assert!(!fell_back3);
+
+        let cfg4 = config::MailjetSettings {
+            base_url: "https://example.com".to_string(),
+            ..Default::default()
+        };
+        let (url4, fell_back4) = resolve_endpoint(&cfg4);
+        assert_eq!(url4, MAILJET_DEFAULT_ENDPOINT);
+        assert!(fell_back4);
+    }
+
+    #[tokio::test]
+    async fn send_mailjet_requires_configuration() {
+        let cfg = config::MailjetSettings::default();
+        let err = send_mailjet(&cfg, "a@example.com", "subj", "text", "<p>html</p>")
+            .await
+            .unwrap_err();
+        match err {
+            EmailError::NotConfigured => {}
+            _ => panic!("expected NotConfigured"),
+        }
+    }
+}
