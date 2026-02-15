@@ -2,8 +2,6 @@
   --bg: #fff;
   --fg: #000;
   --r: 4px;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
   color-scheme: light dark;
@@ -94,7 +92,6 @@ body {
 }
 
 .status {
-  font-family: var(--mono);
   font-size: 0.7rem;
   padding: 0.3rem 0.45rem;
   border: 1px solid var(--fg);
@@ -129,13 +126,11 @@ body {
 
 .lab {
   font-size: 0.7rem;
-  font-family: var(--mono);
 }
 
 .err {
   min-height: 1.1rem;
   font-size: 0.7rem;
-  font-family: var(--mono);
 }
 
 .link {
@@ -143,7 +138,6 @@ body {
   font-size: 0.7rem;
   color: var(--fg);
   text-decoration: underline;
-  font-family: var(--mono);
 }
 
 .messages {
@@ -174,7 +168,6 @@ body {
 
 .meta {
   margin-top: 0.35rem;
-  font-family: var(--mono);
   font-size: 0.7rem;
 }
 
@@ -234,7 +227,6 @@ button {
   color: var(--fg);
   cursor: pointer;
   font-weight: 700;
-  font-family: var(--mono);
   font-size: 0.7rem;
   letter-spacing: 0.01rem;
 }

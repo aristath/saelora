@@ -3,10 +3,7 @@
   --fg: #000;
   --r: 4px;
 
-  --serif: ui-serif, "Iowan Old Style", "Charter", "Palatino Linotype", Palatino, serif;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
 
   color-scheme: light dark;
 }
@@ -76,13 +73,11 @@ body {
   border-radius: var(--r);
   display: grid;
   place-items: center;
-  font-family: var(--serif);
   font-weight: 800;
   border: 1px solid var(--fg);
 }
 
 .name {
-  font-family: var(--serif);
   letter-spacing: 0.015rem;
   font-size: 1.15rem;
 }
@@ -97,7 +92,6 @@ body {
 .links a {
   text-decoration: none;
   color: var(--fg);
-  font-family: var(--mono);
   font-size: 0.7rem;
   padding: 0.45rem 0.6rem;
   border-radius: var(--r);
@@ -121,21 +115,18 @@ body {
 
 .kicker {
   display: block;
-  font-family: var(--mono);
   font-size: 0.7rem;
   letter-spacing: 0.03rem;
   margin-bottom: 0.5rem;
 }
 
 .tagline {
-  font-family: var(--mono);
   font-size: 0.7rem;
   margin-bottom: 0.9rem;
 }
 
 h1 {
   margin: 0;
-  font-family: var(--serif);
   font-size: clamp(2.4rem, 5vw, 3.6rem);
   line-height: 1.02;
   letter-spacing: -0.03rem;
@@ -169,7 +160,6 @@ h1 {
   color: var(--fg);
   background: var(--bg);
   cursor: pointer;
-  font-family: var(--mono);
   font-size: 0.7rem;
   letter-spacing: 0.01rem;
   white-space: nowrap;
@@ -221,20 +211,17 @@ a:focus-visible {
 
 .invite-status {
   margin-top: 0.6rem;
-  font-family: var(--mono);
   font-size: 0.7rem;
   min-height: 1.1rem;
 }
 
 .note {
   margin-top: 0.8rem;
-  font-family: var(--mono);
   font-size: 0.7rem;
 }
 
 .tiny {
   margin-top: 0.5rem;
-  font-family: var(--mono);
   font-size: 0.7rem;
   max-width: 70ch;
 }
