@@ -25,37 +25,73 @@ fn is_tty() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
-fn parse_args() -> AppConfig {
+#[derive(Debug, PartialEq, Eq)]
+enum CliExit {
+    Help,
+    Version,
+    Error(String),
+}
+
+fn usage() -> String {
+    format!(
+        "\
+saelora {}
+
+Usage:
+  saelora [--addr <HOST:PORT>] [--data-dir <PATH>] [--headless]
+
+Options:
+  --addr <HOST:PORT>     Bind address (default: 127.0.0.1:8080)
+  --data-dir <PATH>      Data directory (default: ./data)
+  --headless             Run without the TUI (server-only)
+  -h, --help             Show this help and exit
+  --version              Show version and exit
+",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn parse_args_from<I, S>(args: I) -> Result<AppConfig, CliExit>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     // Keep flags minimal; default experience is interactive.
     let mut addr = "127.0.0.1:8080".to_string();
     let mut data_dir = PathBuf::from("./data");
     let mut headless = false;
 
-    let mut it = std::env::args().skip(1);
+    let mut it = args.into_iter().map(Into::into);
     while let Some(a) = it.next() {
         match a.as_str() {
+            "-h" | "--help" => return Err(CliExit::Help),
+            "--version" => return Err(CliExit::Version),
             "--addr" => {
-                if let Some(v) = it.next() {
-                    addr = v;
-                }
+                let Some(v) = it.next() else {
+                    return Err(CliExit::Error("missing value for --addr".to_string()));
+                };
+                addr = v;
             }
             "--data-dir" => {
-                if let Some(v) = it.next() {
-                    data_dir = PathBuf::from(v);
-                }
+                let Some(v) = it.next() else {
+                    return Err(CliExit::Error("missing value for --data-dir".to_string()));
+                };
+                data_dir = PathBuf::from(v);
             }
-            "--headless" => {
-                headless = true;
-            }
-            _ => {}
+            "--headless" => headless = true,
+            _ => return Err(CliExit::Error(format!("unknown flag: {a}"))),
         }
     }
 
-    AppConfig {
+    Ok(AppConfig {
         addr,
         data_dir,
         headless,
-    }
+    })
+}
+
+fn parse_args() -> Result<AppConfig, CliExit> {
+    parse_args_from(std::env::args().skip(1))
 }
 
 fn init_logging(data_dir: &PathBuf, interactive: bool) {
@@ -144,7 +180,21 @@ fn split_host_port(s: &str) -> Result<(String, u16), ()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cfg = parse_args();
+    let cfg = match parse_args() {
+        Ok(cfg) => cfg,
+        Err(CliExit::Help) => {
+            print!("{}", usage());
+            return Ok(());
+        }
+        Err(CliExit::Version) => {
+            println!("saelora {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Err(CliExit::Error(msg)) => {
+            eprintln!("{msg}\n\n{}", usage());
+            std::process::exit(2);
+        }
+    };
     let interactive = !cfg.headless && is_tty();
     init_logging(&cfg.data_dir, interactive);
 
@@ -201,6 +251,35 @@ async fn main() -> anyhow::Result<()> {
                 Ok(r) => r,
                 Err(e) => Err(anyhow::anyhow!("server task join error: {e}")),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_parsing_help_version_and_errors() {
+        assert_eq!(parse_args_from(["--help"]).unwrap_err(), CliExit::Help);
+        assert_eq!(parse_args_from(["-h"]).unwrap_err(), CliExit::Help);
+        assert_eq!(
+            parse_args_from(["--version"]).unwrap_err(),
+            CliExit::Version
+        );
+
+        let cfg = parse_args_from(["--addr", "0.0.0.0:1234", "--headless"]).unwrap();
+        assert_eq!(cfg.addr, "0.0.0.0:1234");
+        assert!(cfg.headless);
+
+        match parse_args_from(["--addr"]).unwrap_err() {
+            CliExit::Error(s) => assert!(s.contains("--addr")),
+            other => panic!("expected CliExit::Error, got {other:?}"),
+        }
+
+        match parse_args_from(["--nope"]).unwrap_err() {
+            CliExit::Error(s) => assert!(s.contains("unknown flag")),
+            other => panic!("expected CliExit::Error, got {other:?}"),
         }
     }
 }
