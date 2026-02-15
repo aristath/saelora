@@ -1,0 +1,271 @@
+:root {
+  --bg: #fff;
+  --fg: #000;
+  --r: 4px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000;
+    --fg: #fff;
+  }
+}
+
+html[data-theme='light'] {
+  --bg: #fff;
+  --fg: #000;
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  --bg: #000;
+  --fg: #fff;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+html {
+  /* 20px base (assuming the browser default is 16px). */
+  font-size: 125%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 1rem;
+}
+
+.app {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  padding: 1.1rem 0.8rem 1.6rem;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.7rem;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+
+.home {
+  margin: 0;
+  font-size: 1.1rem;
+  letter-spacing: 0.01rem;
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.home:hover {
+  text-decoration: underline;
+}
+
+.sub {
+  font-size: 0.7rem;
+}
+
+.status {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--fg);
+  border-radius: var(--r);
+  white-space: nowrap;
+}
+
+.panel {
+  border: 1px solid var(--fg);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.panel-inner {
+  padding: 0.9rem 0.9rem 1rem;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.h {
+  margin: 0 0 0.7rem 0;
+  font-size: 1.2rem;
+  letter-spacing: 0.01rem;
+}
+
+.form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.lab {
+  font-size: 0.7rem;
+  font-family: var(--mono);
+}
+
+.err {
+  min-height: 1.1rem;
+  font-size: 0.7rem;
+  font-family: var(--mono);
+}
+
+.link {
+  align-self: center;
+  font-size: 0.7rem;
+  color: var(--fg);
+  text-decoration: underline;
+  font-family: var(--mono);
+}
+
+.messages {
+  height: min(62vh, 560px);
+  overflow: auto;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.msg {
+  max-width: min(720px, 92%);
+  padding: 0.6rem 0.7rem;
+  border-radius: var(--r);
+  border: 1px solid var(--fg);
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.msg.user {
+  align-self: flex-end;
+}
+
+.msg.assistant {
+  align-self: flex-start;
+}
+
+.meta {
+  margin-top: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.composer {
+  border-top: 1px solid var(--fg);
+  padding: 0.7rem 0.8rem 0.8rem;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 2.8rem;
+  max-height: 11rem;
+  padding: 0.55rem 0.55rem;
+  border-radius: var(--r);
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+  line-height: 1.35;
+  font: inherit;
+}
+
+input {
+  width: 100%;
+  height: 2.2rem;
+  padding: 0 0.55rem;
+  border-radius: var(--r);
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+  font: inherit;
+}
+
+textarea:focus,
+input:focus,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+  flex-wrap: wrap;
+}
+
+button {
+  height: 2.2rem;
+  padding: 0 0.7rem;
+  border-radius: var(--r);
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 700;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.01rem;
+}
+
+button:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+button:disabled:hover {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.ghost {
+  font-weight: 700;
+}
+
+.icon {
+  width: 2.2rem;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}

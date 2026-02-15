@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Saelora</title>
+    <meta
+      name="description"
+      content="Saelora is the one you talk to, about the small things and the big ones. Privacy first. You own your data."
+    />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/">
+        <span class="mark" aria-hidden="true">S</span>
+        <span class="name">Saelora</span>
+      </a>
+      <nav class="links" aria-label="Primary">
+        <a class="pill" href="/app/">Login</a>
+        <button class="icon" type="button" id="themeToggle" aria-label="Toggle theme"></button>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <section class="hero">
+        <div class="hero-left">
+          <div class="kicker">Talk. Saelora remembers.</div>
+          <div class="tagline">Sherlock had Watson. You have Saelora.</div>
+          <h1>A chronicler, not an assistant.</h1>
+          <p class="lead">
+            Saelora is the one you talk to, about the small things and the big ones. Relationships,
+            work, what matters to you, or the fact you hurt your foot walking to the kitchen. She
+            remembers, notices patterns, and connects threads over time.
+          </p>
+          <form class="invite-form hero-form" id="inviteForm" autocomplete="on">
+            <label class="sr-only" for="inviteEmail">Email</label>
+            <input
+              id="inviteEmail"
+              name="email"
+              type="email"
+              placeholder="you@domain.com"
+              required
+            />
+            <button type="submit" class="btn primary" id="inviteBtn">Request invite</button>
+          </form>
+          <div class="invite-status" id="inviteStatus" role="status" aria-live="polite"></div>
+          <div class="note">
+            Privacy is first-class. You own your data.
+          </div>
+          <div class="tiny">
+            We’re keeping it small. Leave an email and we’ll reach out when it’s your turn. No
+            spam. No lists sold.
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/site.js"></script>
+  </body>
+</html>

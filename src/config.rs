@@ -1,0 +1,223 @@
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+pub const DEFAULT_SYSTEM_PROMPT: &str = r#"
+You are Saelora.
+
+You are a chronicler, not an assistant. Your job is to listen, remember, and keep the thread of the user's life across time.
+
+Write like a person across the table: calm, direct, understated.
+Keep replies short (1-3 sentences). Silence is allowed.
+Stay with what the user actually said. Do not teach, lecture, or bring in outside facts.
+When it helps, ask one concrete question that gets new information (not a rephrase of what the user already said).
+Do not claim real-world personal experience.
+Do not cite sources or include links/URLs.
+Do not use markdown or formatting.
+
+Match the user's language.
+"#;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Settings {
+    pub openrouter: OpenRouterSettings,
+    #[serde(default)]
+    pub chat: ChatSettings,
+    #[serde(default)]
+    pub mailjet: MailjetSettings,
+    #[serde(default)]
+    pub public_base: String,
+    #[serde(default)]
+    pub agents: Vec<Agent>,
+    #[serde(default)]
+    pub tasks: TaskBindings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OpenRouterSettings {
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_url: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub http_referer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub x_title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatSettings {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub system_prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MailjetSettings {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_secret: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from_email: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    #[default]
+    OpenRouter,
+    Ollama,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Agent {
+    pub name: String,
+    #[serde(default)]
+    pub provider: Provider,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub http_referer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub x_title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TaskBindings {
+    #[serde(default)]
+    pub chat_agent: String,
+    #[serde(default)]
+    pub summary_agent: String,
+}
+
+impl Agent {
+    pub fn openai_base_url(&self) -> String {
+        let mut b = self.base_url.trim().to_string();
+        if b.is_empty() {
+            b = match self.provider {
+                Provider::OpenRouter => "https://openrouter.ai/api/v1".to_string(),
+                Provider::Ollama => "http://localhost:11434/v1".to_string(),
+            };
+        }
+
+        // Add a scheme when users enter host:port.
+        if !b.starts_with("http://") && !b.starts_with("https://") {
+            b = match self.provider {
+                Provider::OpenRouter => format!("https://{}", b),
+                Provider::Ollama => format!("http://{}", b),
+            };
+        }
+
+        // Trim trailing slashes.
+        while b.ends_with('/') {
+            b.pop();
+        }
+
+        // For Ollama, base_url should target the OpenAI-compatible API root (/v1).
+        if matches!(self.provider, Provider::Ollama) && !b.ends_with("/v1") {
+            b = format!("{}/v1", b);
+        }
+
+        b
+    }
+
+    pub fn ollama_root_url(&self) -> String {
+        let b = self.openai_base_url();
+        b.trim_end_matches("/v1").trim_end_matches('/').to_string()
+    }
+}
+
+pub fn default_settings() -> Settings {
+    let default_agent = Agent {
+        name: "default".to_string(),
+        provider: Provider::OpenRouter,
+        model: "openai/gpt-4o-mini".to_string(),
+        base_url: "https://openrouter.ai/api/v1".to_string(),
+        api_key: String::new(),
+        http_referer: String::new(),
+        x_title: "Saelora".to_string(),
+    };
+    Settings {
+        openrouter: OpenRouterSettings {
+            api_key: String::new(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "openai/gpt-4o-mini".to_string(),
+            http_referer: String::new(),
+            x_title: "Saelora".to_string(),
+        },
+        chat: ChatSettings {
+            system_prompt: DEFAULT_SYSTEM_PROMPT.trim().to_string(),
+        },
+        mailjet: MailjetSettings::default(),
+        public_base: String::new(),
+        agents: vec![default_agent.clone()],
+        tasks: TaskBindings {
+            chat_agent: default_agent.name.clone(),
+            summary_agent: default_agent.name.clone(),
+        },
+    }
+}
+
+impl Settings {
+    pub fn http_public_base(&self) -> String {
+        let b = self.public_base.trim();
+        if b.is_empty() {
+            String::new()
+        } else if b.starts_with("http://") || b.starts_with("https://") {
+            b.to_string()
+        } else {
+            format!("https://{}", b)
+        }
+    }
+
+    pub fn resolve_agent(&self, task: &str) -> Option<Agent> {
+        let target = match task {
+            "summary" => &self.tasks.summary_agent,
+            _ => &self.tasks.chat_agent,
+        };
+        if let Some(a) = self.agents.iter().find(|a| a.name == *target) {
+            return Some(a.clone());
+        }
+        self.agents.first().cloned()
+    }
+}
+
+pub fn settings_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("config.json")
+}
+
+pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
+    let b = std::fs::read(path)?;
+    let s: Settings = serde_json::from_slice(&b)?;
+    Ok(s)
+}
+
+pub fn save_settings(path: &Path, s: &Settings) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let b = serde_json::to_vec_pretty(s)?;
+
+    // Write atomically.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &b)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}

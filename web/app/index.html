@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Saelora</title>
+    <link rel="stylesheet" href="/app/app.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <div class="brand">
+          <a class="home" href="/">Saelora</a>
+          <div class="sub">Chat</div>
+        </div>
+        <div class="right">
+          <div class="status" id="status">connecting</div>
+          <button class="icon" type="button" id="themeToggle" aria-label="Toggle theme"></button>
+          <button class="ghost hidden" type="button" id="logout">Logout</button>
+        </div>
+      </header>
+
+      <section class="panel hidden" id="view-login">
+        <div class="panel-inner">
+          <h1 class="h">Login</h1>
+          <form class="form" id="loginForm">
+            <label class="lab" for="loginEmail">Email</label>
+            <input id="loginEmail" type="email" autocomplete="email" />
+            <label class="lab" for="loginPassword">Password</label>
+            <input id="loginPassword" type="password" autocomplete="current-password" />
+            <div class="row">
+              <button type="submit" id="loginBtn">Sign in with password</button>
+              <a class="link" href="/">Request invite</a>
+            </div>
+            <div class="row">
+              <button class="ghost" type="button" id="passwordLinkBtn">Email me a login link</button>
+              <button class="ghost" type="button" id="registerBtn">Create account</button>
+            </div>
+            <div class="err" id="loginErr"></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="view-setup">
+        <div class="panel-inner">
+          <h1 class="h">Set password</h1>
+          <form class="form" id="setupForm">
+            <label class="lab" for="setupPassword">Password</label>
+            <input id="setupPassword" type="password" autocomplete="new-password" />
+            <label class="lab" for="setupConfirm">Confirm</label>
+            <input id="setupConfirm" type="password" autocomplete="new-password" />
+            <div class="row">
+              <button type="submit" id="setupBtn">Save</button>
+              <a class="link" href="/app/">Back to login</a>
+            </div>
+            <div class="err" id="setupErr"></div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="view-chat">
+        <div class="messages" id="messages"></div>
+        <form class="composer" id="composer">
+          <textarea
+            id="input"
+            placeholder="Say it plainly."
+            rows="3"
+            autocomplete="off"
+            spellcheck="true"
+          ></textarea>
+          <div class="row">
+            <button type="submit" id="send">Send</button>
+            <button type="button" id="stop" disabled>Stop</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script type="module" src="/app/app.js"></script>
+  </body>
+</html>

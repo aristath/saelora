@@ -1,0 +1,11 @@
+/target
+/data
+/data-*/
+*.db
+*.db-shm
+*.db-wal
+saelora.log
+.DS_Store
+web/**/node_modules/
+web/**/dist/
+web/**/.vite/
