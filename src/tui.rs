@@ -45,7 +45,6 @@ const THEME: Theme = Theme {
 #[derive(Debug)]
 enum Screen {
     Menu,
-    OpenRouterConfig,
     SystemPrompt,
     EmailConfig,
     Models,
@@ -90,11 +89,6 @@ struct App {
     msgs_recv: u64,
 
     focus: usize, // config focus field
-    api_key: String,
-    model: String,
-    base_url: String,
-    http_referer: String,
-    x_title: String,
     mail_api_key: String,
     mail_api_secret: String,
     mail_from_email: String,
@@ -146,22 +140,21 @@ pub async fn run_tui(data_dir: PathBuf) -> anyhow::Result<()> {
         Err(_) => config::default_settings(),
     };
     if settings.agents.is_empty() {
-        let legacy = config::Agent {
-            name: "default".to_string(),
-            provider: config::Provider::OpenRouter,
-            model: settings.openrouter.model.clone(),
-            base_url: settings.openrouter.base_url.clone(),
-            api_key: settings.openrouter.api_key.clone(),
-            http_referer: settings.openrouter.http_referer.clone(),
-            x_title: settings.openrouter.x_title.clone(),
-        };
-        settings.agents.push(legacy.clone());
-        if settings.tasks.chat_agent.is_empty() {
-            settings.tasks.chat_agent = legacy.name.clone();
-        }
-        if settings.tasks.summary_agent.is_empty() {
-            settings.tasks.summary_agent = legacy.name.clone();
-        }
+        settings.agents = config::default_settings().agents;
+    }
+    if settings.tasks.chat_agent.is_empty() {
+        settings.tasks.chat_agent = settings
+            .agents
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+    }
+    if settings.tasks.summary_agent.is_empty() {
+        settings.tasks.summary_agent = settings
+            .agents
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
     }
     if settings.chat.system_prompt.trim().is_empty() {
         settings.chat.system_prompt = config::DEFAULT_SYSTEM_PROMPT.trim().to_string();
@@ -201,19 +194,6 @@ pub async fn run_tui(data_dir: PathBuf) -> anyhow::Result<()> {
         msgs_sent: 0,
         msgs_recv: 0,
         focus: 0,
-        api_key: settings.openrouter.api_key.clone(),
-        model: settings.openrouter.model.clone(),
-        base_url: if settings.openrouter.base_url.trim().is_empty() {
-            openrouter::DEFAULT_BASE_URL.to_string()
-        } else {
-            settings.openrouter.base_url.clone()
-        },
-        http_referer: settings.openrouter.http_referer.clone(),
-        x_title: if settings.openrouter.x_title.trim().is_empty() {
-            "Saelora".to_string()
-        } else {
-            settings.openrouter.x_title.clone()
-        },
         mail_api_key: settings.mailjet.api_key.clone(),
         mail_api_secret: settings.mailjet.api_secret.clone(),
         mail_from_email: settings.mailjet.from_email.clone(),
@@ -400,7 +380,7 @@ fn handle_bg_msg(app: &mut App, msg: BgMsg) {
                 }
                 Err(e) => {
                     app.err = e;
-                    app.screen = Screen::OpenRouterConfig;
+                    app.screen = Screen::Agents;
                 }
             }
         }
@@ -512,7 +492,6 @@ async fn handle_ui_msg(
 
             match app.screen {
                 Screen::Menu => handle_menu_key(app, k, bg_tx).await?,
-                Screen::OpenRouterConfig => handle_config_key(app, k, bg_tx).await?,
                 Screen::SystemPrompt => handle_prompt_key(app, k, bg_tx).await?,
                 Screen::EmailConfig => handle_email_key(app, k).await?,
                 Screen::Models => handle_models_key(app, k, bg_tx).await?,
@@ -543,7 +522,7 @@ async fn handle_menu_key(
         }
         KeyCode::Enter => match app.menu_idx {
             0 => {
-                app.screen = Screen::OpenRouterConfig;
+                open_openrouter_config(app);
                 app.info.clear();
                 app.err.clear();
             }
@@ -599,95 +578,76 @@ async fn handle_menu_key(
     Ok(())
 }
 
-async fn handle_config_key(
-    app: &mut App,
-    k: KeyEvent,
-    bg_tx: &mpsc::UnboundedSender<BgMsg>,
-) -> anyhow::Result<()> {
-    match k.code {
-        KeyCode::Esc => {
-            app.screen = Screen::Menu;
-            // refresh counts
-            let data_dir = app.data_dir.clone();
-            let bg_tx = bg_tx.clone();
-            tokio::spawn(async move {
-                let mgr = db::Manager::new(data_dir);
-                let n = mgr.waitlist_count().map_err(|e| e.to_string()).unwrap_or(0);
-                let _ = bg_tx.send(BgMsg::InviteCount(n));
-                let w = mgr
-                    .whitelist_count()
-                    .map_err(|e| e.to_string())
-                    .unwrap_or(0);
-                let _ = bg_tx.send(BgMsg::WhitelistCount(w));
-                let users = (|| -> Result<usize, String> {
-                    let us = mgr.users().map_err(|e| e.to_string())?;
-                    us.count_users().map_err(|e| e.to_string())
-                })()
-                .unwrap_or(0);
-                let _ = bg_tx.send(BgMsg::UsersCount(users));
-            });
+fn open_openrouter_config(app: &mut App) {
+    if app.agents.is_empty() {
+        app.agents = config::default_settings().agents;
+        if app.task_chat.trim().is_empty() {
+            app.task_chat = app
+                .agents
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
         }
-        KeyCode::Tab | KeyCode::Down => {
-            app.focus = (app.focus + 1) % 5;
-        }
-        KeyCode::BackTab | KeyCode::Up => {
-            app.focus = (app.focus + 4) % 5;
-        }
-        KeyCode::Enter => {
-            if app.focus == 1 {
-                // Model picker.
-                if app.api_key.trim().is_empty() {
-                    app.err = "API key is required to list models".to_string();
-                    return Ok(());
-                }
-                app.screen = Screen::Models;
-                app.loading_models = true;
-                let api_key = app.api_key.clone();
-                let base_url = if app.base_url.trim().is_empty() {
-                    openrouter::DEFAULT_BASE_URL.to_string()
-                } else {
-                    app.base_url.clone()
-                };
-                let http_referer = app.http_referer.clone();
-                let x_title = app.x_title.clone();
-                let bg_tx = bg_tx.clone();
-                tokio::spawn(async move {
-                    let c = openrouter::Client::new(openrouter::Config {
-                        api_key,
-                        base_url,
-                        http_referer,
-                        x_title,
-                    });
-                    let res = match c {
-                        Ok(c) => c.list_models().await.map_err(|e| e.to_string()),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    let _ = bg_tx.send(BgMsg::ModelsLoaded(res));
-                });
-            } else {
-                app.focus = (app.focus + 1) % 5;
-            }
-        }
-        KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            apply_openrouter_form_to_agent(app);
-            let s = collect_settings(app);
-            if s.openrouter.api_key.trim().is_empty() {
-                app.err = "API key is required".to_string();
-                return Ok(());
-            }
-            if s.openrouter.model.trim().is_empty() {
-                app.err = "model is required".to_string();
-                return Ok(());
-            }
-            config::save_settings(&config::settings_path(&app.data_dir), &s)?;
-            app.info = "saved".to_string();
-            app.err.clear();
-        }
-        _ => {
-            edit_focused_field(app, k);
+        if app.task_summary.trim().is_empty() {
+            app.task_summary = app
+                .agents
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
         }
     }
-    Ok(())
+
+    // Prefer the current chat agent if it's OpenRouter.
+    let mut idx_opt = app.agents.iter().position(|a| {
+        a.name == app.task_chat && matches!(a.provider, config::Provider::OpenRouter)
+    });
+
+    // Else: prefer "default" OpenRouter.
+    if idx_opt.is_none() {
+        idx_opt = app.agents.iter().position(|a| {
+            a.name == "default" && matches!(a.provider, config::Provider::OpenRouter)
+        });
+    }
+
+    // Else: first OpenRouter agent.
+    if idx_opt.is_none() {
+        idx_opt = app
+            .agents
+            .iter()
+            .position(|a| matches!(a.provider, config::Provider::OpenRouter));
+    }
+
+    // Else: create a new OpenRouter agent.
+    if idx_opt.is_none() {
+        let mut a = config::default_settings().agents[0].clone();
+        a.provider = config::Provider::OpenRouter;
+        a.api_key.clear();
+        a.base_url = openrouter::DEFAULT_BASE_URL.to_string();
+        a.http_referer.clear();
+        a.x_title = "Saelora".to_string();
+
+        let mut name = "openrouter".to_string();
+        let mut i = 1usize;
+        while app.agents.iter().any(|x| x.name == name) {
+            i += 1;
+            name = format!("openrouter{}", i);
+        }
+        a.name = name;
+        app.agents.push(a);
+        idx_opt = Some(app.agents.len() - 1);
+    }
+
+    let idx = idx_opt.unwrap_or(0).min(app.agents.len().saturating_sub(1));
+
+    app.screen = Screen::Agents;
+    app.agents_state.select(Some(idx));
+    app.agent_modal = true;
+    app.agent_modal_idx = Some(idx);
+    // Focus API key for quick setup.
+    app.agent_focus = 4;
+    app.model_picker = false;
+    app.loading_models = false;
+    app.loading_agent_models = false;
 }
 
 async fn handle_prompt_key(
@@ -761,7 +721,7 @@ async fn handle_models_key(
 ) -> anyhow::Result<()> {
     match k.code {
         KeyCode::Esc => {
-            app.screen = Screen::OpenRouterConfig;
+            app.screen = Screen::Agents;
             app.loading_models = false;
         }
         KeyCode::Up => {
@@ -781,17 +741,29 @@ async fn handle_models_key(
                 return Ok(());
             }
             let id = app.models[idx].id.clone();
-            app.model = id;
-            apply_openrouter_form_to_agent(app);
-
-            // Persist immediately (parity with Go).
-            let s = collect_settings(app);
-            if !s.openrouter.api_key.trim().is_empty() && !s.openrouter.model.trim().is_empty() {
-                config::save_settings(&config::settings_path(&app.data_dir), &s)?;
+            if let Some(aidx) = app.agent_modal_idx {
+                if aidx < app.agents.len() {
+                    app.agents[aidx].model = id;
+                }
             }
 
-            app.screen = Screen::OpenRouterConfig;
-            app.focus = 1;
+            // Persist immediately (parity with Go).
+            if let Some(aidx) = app.agent_modal_idx {
+                if let Some(a) = app.agents.get(aidx) {
+                    if matches!(a.provider, config::Provider::OpenRouter)
+                        && !a.name.trim().is_empty()
+                        && !a.api_key.trim().is_empty()
+                        && !a.model.trim().is_empty()
+                    {
+                        let s = collect_settings(app);
+                        config::save_settings(&config::settings_path(&app.data_dir), &s)?;
+                    }
+                }
+            }
+
+            app.screen = Screen::Agents;
+            app.agent_modal = true;
+            app.agent_focus = 2;
         }
         KeyCode::Char(c) if ('1'..='9').contains(&c) => {
             if app.loading_models || app.models.is_empty() {
@@ -1057,11 +1029,6 @@ async fn handle_agents_key(
 
 fn collect_settings(app: &App) -> config::Settings {
     let mut s = config::default_settings();
-    s.openrouter.api_key = app.api_key.trim().to_string();
-    s.openrouter.model = app.model.trim().to_string();
-    s.openrouter.base_url = app.base_url.trim().to_string();
-    s.openrouter.http_referer = app.http_referer.trim().to_string();
-    s.openrouter.x_title = app.x_title.trim().to_string();
     s.chat.system_prompt = app.system_prompt.text().trim().to_string();
     s.mailjet.api_key = app.mail_api_key.trim().to_string();
     s.mailjet.api_secret = app.mail_api_secret.trim().to_string();
@@ -1082,31 +1049,6 @@ fn collect_settings(app: &App) -> config::Settings {
         }
     }
     s
-}
-
-fn edit_focused_field(app: &mut App, k: KeyEvent) {
-    let target = match app.focus {
-        0 => &mut app.api_key,
-        1 => &mut app.model,
-        2 => &mut app.base_url,
-        3 => &mut app.http_referer,
-        4 => &mut app.x_title,
-        _ => return,
-    };
-
-    match k.code {
-        KeyCode::Backspace => {
-            target.pop();
-        }
-        KeyCode::Char(c) => {
-            if !k.modifiers.contains(KeyModifiers::CONTROL)
-                && !k.modifiers.contains(KeyModifiers::ALT)
-            {
-                target.push(c);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn edit_mail_field(app: &mut App, k: KeyEvent) {
@@ -1199,7 +1141,40 @@ fn handle_agent_modal_key(
             } else if app.agent_focus == 8 {
                 app.task_summary = app.agents[idx].name.clone();
             } else if app.agent_focus == 2 && !app.loading_agent_models {
-                start_agent_model_load(app, idx, bg_tx.clone());
+                match app.agents[idx].provider {
+                    config::Provider::OpenRouter => {
+                        if app.agents[idx].api_key.trim().is_empty() {
+                            app.err = "API key is required to list models".to_string();
+                            return Ok(());
+                        }
+                        app.screen = Screen::Models;
+                        app.loading_models = true;
+                        app.models.clear();
+                        app.models_state.select(Some(0));
+                        app.sort_col = 0;
+                        app.sort_asc = true;
+
+                        let agent = app.agents[idx].clone();
+                        let base_url = agent.openai_base_url();
+                        let bg_tx = bg_tx.clone();
+                        tokio::spawn(async move {
+                            let c = openrouter::Client::new(openrouter::Config {
+                                api_key: agent.api_key,
+                                base_url,
+                                http_referer: agent.http_referer,
+                                x_title: agent.x_title,
+                            });
+                            let res = match c {
+                                Ok(c) => c.list_models().await.map_err(|e| e.to_string()),
+                                Err(e) => Err(e.to_string()),
+                            };
+                            let _ = bg_tx.send(BgMsg::ModelsLoaded(res));
+                        });
+                    }
+                    config::Provider::Ollama => {
+                        start_agent_model_load(app, idx, bg_tx.clone());
+                    }
+                }
             }
         }
         KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1272,75 +1247,19 @@ fn toggle_agent_provider(a: &mut config::Agent) {
 }
 
 fn default_agent_from_app(app: &App) -> config::Agent {
-    config::Agent {
-        name: format!("agent{}", app.agents.len() + 1),
-        provider: config::Provider::OpenRouter,
-        model: app.model.clone(),
-        base_url: app.base_url.clone(),
-        api_key: app.api_key.clone(),
-        http_referer: app.http_referer.clone(),
-        x_title: app.x_title.clone(),
-    }
-}
-
-fn apply_openrouter_form_to_agent(app: &mut App) {
-    // Prefer updating the current chat agent if it's OpenRouter; otherwise update the first
-    // OpenRouter agent (or create one) so the legacy "OpenRouter config" screen stays meaningful.
-    let mut idx_opt = None;
-    if let Some(i) = app
+    let mut a = app
         .agents
-        .iter()
-        .position(|a| a.name == app.task_chat && matches!(a.provider, config::Provider::OpenRouter))
-    {
-        idx_opt = Some(i);
+        .first()
+        .cloned()
+        .unwrap_or_else(|| config::default_settings().agents[0].clone());
+    let mut name = format!("agent{}", app.agents.len() + 1);
+    let mut i = app.agents.len() + 1;
+    while app.agents.iter().any(|x| x.name == name) {
+        i += 1;
+        name = format!("agent{}", i);
     }
-    if idx_opt.is_none() {
-        if let Some(i) = app
-            .agents
-            .iter()
-            .position(|a| a.name == "default" && matches!(a.provider, config::Provider::OpenRouter))
-        {
-            idx_opt = Some(i);
-        }
-    }
-    if idx_opt.is_none() {
-        if let Some(i) = app
-            .agents
-            .iter()
-            .position(|a| matches!(a.provider, config::Provider::OpenRouter))
-        {
-            idx_opt = Some(i);
-        }
-    }
-    if idx_opt.is_none() {
-        // Create a dedicated OpenRouter agent.
-        let mut name = "openrouter".to_string();
-        if app.agents.iter().any(|a| a.name == name) {
-            name = format!("openrouter{}", app.agents.len() + 1);
-        }
-        app.agents.push(config::Agent {
-            name,
-            provider: config::Provider::OpenRouter,
-            model: String::new(),
-            base_url: String::new(),
-            api_key: String::new(),
-            http_referer: String::new(),
-            x_title: String::new(),
-        });
-        idx_opt = Some(app.agents.len() - 1);
-    }
-
-    let idx = idx_opt.unwrap_or(0);
-    if idx >= app.agents.len() {
-        return;
-    }
-    let a = &mut app.agents[idx];
-    a.provider = config::Provider::OpenRouter;
-    a.api_key = app.api_key.trim().to_string();
-    a.model = app.model.trim().to_string();
-    a.base_url = app.base_url.trim().to_string();
-    a.http_referer = app.http_referer.trim().to_string();
-    a.x_title = app.x_title.trim().to_string();
+    a.name = name;
+    a
 }
 
 fn validate_agents(app: &mut App) -> bool {
@@ -1574,7 +1493,6 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     match app.screen {
         Screen::Menu => draw_menu(f, size, app),
-        Screen::OpenRouterConfig => draw_config(f, size, app),
         Screen::SystemPrompt => draw_prompt(f, size, app),
         Screen::EmailConfig => draw_email_config(f, size, app),
         Screen::Models => draw_models(f, size, app),
@@ -1731,66 +1649,6 @@ fn draw_users(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .block(Block::default());
     let mut state = app.users_state;
     f.render_stateful_widget(table, chunks[3], &mut state);
-}
-
-fn draw_config(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Length(2),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ]
-            .as_ref(),
-        )
-        .split(area);
-
-    let title = Paragraph::new(Line::from(vec![Span::styled(
-        "OpenRouter Config",
-        Style::default().fg(THEME.text).add_modifier(Modifier::BOLD),
-    )]));
-    let help = Paragraph::new(Line::from(vec![Span::styled(
-        "Tab/Shift+Tab move | Enter on Model lists models | Ctrl+S save | Esc back",
-        Style::default().fg(THEME.sub),
-    )]));
-    let stats = Paragraph::new(stats_line(app));
-    f.render_widget(title, chunks[0]);
-    f.render_widget(help, chunks[1]);
-    f.render_widget(stats, chunks[2]);
-
-    let rows = vec![
-        render_field("API key:", &mask_key(&app.api_key), app.focus == 0),
-        render_field("Model:", &app.model, app.focus == 1),
-        render_field("Base:", &app.base_url, app.focus == 2),
-        render_field("Referer:", &app.http_referer, app.focus == 3),
-        render_field("Title:", &app.x_title, app.focus == 4),
-    ];
-    let content = Paragraph::new(Text::from(rows));
-    f.render_widget(content, chunks[2]);
-
-    let mut status = String::new();
-    if !app.err.trim().is_empty() {
-        status = format!("Error: {}", app.err.trim());
-    } else if !app.info.trim().is_empty() {
-        status = app.info.trim().to_string();
-    }
-    let status_style = if !app.err.trim().is_empty() {
-        Style::default().fg(THEME.danger)
-    } else {
-        Style::default().fg(THEME.sub)
-    };
-    f.render_widget(Paragraph::new(status).style(status_style), chunks[3]);
-
-    let path = config::settings_path(&app.data_dir);
-    f.render_widget(
-        Paragraph::new(format!("Settings are stored locally in {}", path.display()))
-            .style(Style::default().fg(Color::DarkGray)),
-        chunks[4],
-    );
 }
 
 fn draw_email_config(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -2899,11 +2757,6 @@ mod tests {
             msgs_sent: 0,
             msgs_recv: 0,
             focus: 0,
-            api_key: String::new(),
-            model: String::new(),
-            base_url: String::new(),
-            http_referer: String::new(),
-            x_title: String::new(),
             mail_api_key: String::new(),
             mail_api_secret: String::new(),
             mail_from_email: String::new(),

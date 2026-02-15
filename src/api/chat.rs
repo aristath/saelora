@@ -235,23 +235,23 @@ fn client_from_disk(
         Err(e) => return Err(anyhow::anyhow!(e)),
     };
 
-    // TODO: remove legacy openrouter block once the TUI no longer needs it.
     if cfg.agents.is_empty() {
-        let legacy = config::Agent {
-            name: "default".to_string(),
-            provider: config::Provider::OpenRouter,
-            model: cfg.openrouter.model.clone(),
-            base_url: cfg.openrouter.base_url.clone(),
-            api_key: cfg.openrouter.api_key.clone(),
-            http_referer: cfg.openrouter.http_referer.clone(),
-            x_title: cfg.openrouter.x_title.clone(),
-        };
-        cfg.agents.push(legacy.clone());
+        // Settings should always include at least one agent; if they don't, fall back to defaults.
+        let s = config::default_settings();
+        cfg.agents = s.agents;
         if cfg.tasks.chat_agent.is_empty() {
-            cfg.tasks.chat_agent = legacy.name.clone();
+            cfg.tasks.chat_agent = cfg
+                .agents
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
         }
         if cfg.tasks.summary_agent.is_empty() {
-            cfg.tasks.summary_agent = legacy.name.clone();
+            cfg.tasks.summary_agent = cfg
+                .agents
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
         }
     }
     if cfg.chat.system_prompt.trim().is_empty() {

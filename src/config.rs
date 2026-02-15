@@ -20,7 +20,6 @@ Match the user's language.
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
-    pub openrouter: OpenRouterSettings,
     #[serde(default)]
     pub chat: ChatSettings,
     #[serde(default)]
@@ -31,18 +30,6 @@ pub struct Settings {
     pub agents: Vec<Agent>,
     #[serde(default)]
     pub tasks: TaskBindings,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct OpenRouterSettings {
-    pub api_key: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub base_url: String,
-    pub model: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub http_referer: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub x_title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -145,13 +132,6 @@ pub fn default_settings() -> Settings {
         x_title: "Saelora".to_string(),
     };
     Settings {
-        openrouter: OpenRouterSettings {
-            api_key: String::new(),
-            base_url: "https://openrouter.ai/api/v1".to_string(),
-            model: "openai/gpt-4o-mini".to_string(),
-            http_referer: String::new(),
-            x_title: "Saelora".to_string(),
-        },
         chat: ChatSettings {
             system_prompt: DEFAULT_SYSTEM_PROMPT.trim().to_string(),
         },
@@ -278,14 +258,14 @@ mod tests {
 
         let mut s = default_settings();
         s.public_base = "https://saelora.ai".to_string();
-        s.openrouter.model = "x-ai/grok-4.1-fast".to_string();
+        s.agents[0].model = "x-ai/grok-4.1-fast".to_string();
         s.chat.system_prompt = "hello".to_string();
 
         save_settings(&path, &s).unwrap();
         let s2 = load_settings(&path).unwrap();
 
         assert_eq!(s2.public_base, "https://saelora.ai");
-        assert_eq!(s2.openrouter.model, "x-ai/grok-4.1-fast");
+        assert_eq!(s2.agents[0].model, "x-ai/grok-4.1-fast");
         assert_eq!(s2.chat.system_prompt, "hello");
         assert!(!s2.agents.is_empty());
     }
