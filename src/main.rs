@@ -129,6 +129,19 @@ fn init_logging(data_dir: &PathBuf, interactive: bool) {
 
 fn listen_addrs(addr: &str) -> Vec<SocketAddr> {
     // Mirror the Go behavior: bind both loopback families when reasonable to avoid "it doesn't run" confusion.
+    if let Some(port) = addr.strip_prefix(':').and_then(|p| p.parse::<u16>().ok()) {
+        // Go's ":8080" binds on all interfaces; accept the same shorthand.
+        // We try both families; the second is best-effort like the loopback behavior below.
+        let mut out = Vec::<SocketAddr>::new();
+        if let Ok(sa) = format!("0.0.0.0:{port}").parse() {
+            out.push(sa);
+        }
+        if let Ok(sa) = format!("[::]:{port}").parse() {
+            out.push(sa);
+        }
+        return out;
+    }
+
     let Ok((host, port)) = split_host_port(addr) else {
         return addr.parse().map(|sa| vec![sa]).unwrap_or_default();
     };
@@ -281,5 +294,13 @@ mod tests {
             CliExit::Error(s) => assert!(s.contains("unknown flag")),
             other => panic!("expected CliExit::Error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn listen_addrs_supports_colon_port_shorthand() {
+        let addrs = listen_addrs(":8080");
+        assert!(!addrs.is_empty());
+        assert!(addrs.iter().any(|a| a.to_string() == "0.0.0.0:8080"));
+        assert!(addrs.iter().any(|a| a.to_string() == "[::]:8080"));
     }
 }
