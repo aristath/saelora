@@ -66,3 +66,30 @@ Ctrl+C quits; Esc backs out of a screen; Ctrl+S saves in config screens.
 ## Health
 
 - `GET /healthz`
+
+## Auto Deploy (git + systemd timer)
+
+The app can auto-deploy by polling `origin/main`, pulling new commits, rebuilding, and restarting `saelora`.
+
+Scripts:
+- `scripts/auto-deploy.sh` — one deploy run (`fetch -> ff-only pull -> build -> install -> restart`)
+- `scripts/install-autodeploy.sh` — installs a systemd timer + service
+
+On the server (Raspberry Pi):
+
+```sh
+sudo ./scripts/install-autodeploy.sh --interval 120s
+```
+
+This configures:
+- `saelora-autodeploy.timer` to check every **120 seconds**
+- `saelora-autodeploy.service` to run deploy logic
+- sudoers rule allowing the deploy user to run `systemctl restart saelora` without a password
+
+Useful commands:
+
+```sh
+systemctl status saelora-autodeploy.timer
+systemctl status saelora-autodeploy.service
+journalctl -u saelora-autodeploy.service -f
+```
