@@ -32,7 +32,9 @@ function applyTheme(t) {
   if (themeToggle) {
     const icon = t === 'dark' ? ICON_DARK : t === 'light' ? ICON_LIGHT : ICON_AUTO
     themeToggle.innerHTML = icon
-    themeToggle.title = t === 'system' ? 'Theme: system' : `Theme: ${t}`
+    const label = t === 'system' ? 'Theme: system' : `Theme: ${t}`
+    themeToggle.title = `${label}. Activate to change.`
+    themeToggle.setAttribute('aria-label', `${label}. Activate to change.`)
   }
 }
 

@@ -49,6 +49,24 @@ body {
   font-size: 1rem;
 }
 
+.skip-link {
+  position: absolute;
+  left: 0.9rem;
+  top: 0.5rem;
+  z-index: 1000;
+  transform: translateY(-220%);
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--r);
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 .nav {
   display: flex;
   align-items: center;
