@@ -2,6 +2,18 @@
   --bg: #fff;
   --fg: #000;
   --r: 4px;
+
+  --base-font-size: 1.25rem;
+  --type-scale-ratio: 1.15;
+  --step--2: calc(var(--base-font-size) / (var(--type-scale-ratio) * var(--type-scale-ratio)));
+  --step--1: calc(var(--base-font-size) / var(--type-scale-ratio));
+  --step-0: var(--base-font-size);
+  --step-1: calc(var(--step-0) * var(--type-scale-ratio));
+  --step-2: calc(var(--step-1) * var(--type-scale-ratio));
+  --step-3: calc(var(--step-2) * var(--type-scale-ratio));
+  --step-4: calc(var(--step-3) * var(--type-scale-ratio));
+  --step-5: calc(var(--step-4) * var(--type-scale-ratio));
+
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
   color-scheme: light dark;
@@ -36,8 +48,7 @@ body {
 }
 
 html {
-  /* 20px base (assuming the browser default is 16px). */
-  font-size: 125%;
+  font-size: 100%;
 }
 
 body {
@@ -45,7 +56,44 @@ body {
   font-family: var(--sans);
   background: var(--bg);
   color: var(--fg);
-  font-size: 1rem;
+  font-size: var(--step-0);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  line-height: 1.15;
+  letter-spacing: -0.01rem;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--step-5);
+}
+
+h2 {
+  font-size: var(--step-4);
+}
+
+h3 {
+  font-size: var(--step-3);
+}
+
+h4 {
+  font-size: var(--step-2);
+}
+
+h5 {
+  font-size: var(--step-1);
+}
+
+h6 {
+  font-size: var(--step-0);
 }
 
 .app {
@@ -76,7 +124,7 @@ body {
 
 .home {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: var(--step-1);
   letter-spacing: 0.01rem;
   color: var(--fg);
   text-decoration: none;
@@ -88,11 +136,11 @@ body {
 }
 
 .sub {
-  font-size: 0.7rem;
+  font-size: var(--step--2);
 }
 
 .status {
-  font-size: 0.7rem;
+  font-size: var(--step--2);
   padding: 0.3rem 0.45rem;
   border: 1px solid var(--fg);
   border-radius: var(--r);
@@ -115,7 +163,7 @@ body {
 
 .h {
   margin: 0 0 0.7rem 0;
-  font-size: 1.2rem;
+  font-size: var(--step-2);
   letter-spacing: 0.01rem;
 }
 
@@ -125,17 +173,17 @@ body {
 }
 
 .lab {
-  font-size: 0.7rem;
+  font-size: var(--step--2);
 }
 
 .err {
   min-height: 1.1rem;
-  font-size: 0.7rem;
+  font-size: var(--step--2);
 }
 
 .link {
   align-self: center;
-  font-size: 0.7rem;
+  font-size: var(--step--2);
   color: var(--fg);
   text-decoration: underline;
 }
@@ -168,7 +216,7 @@ body {
 
 .meta {
   margin-top: 0.35rem;
-  font-size: 0.7rem;
+  font-size: var(--step--2);
 }
 
 .composer {
@@ -227,7 +275,7 @@ button {
   color: var(--fg);
   cursor: pointer;
   font-weight: 700;
-  font-size: 0.7rem;
+  font-size: var(--step--2);
   letter-spacing: 0.01rem;
 }
 
