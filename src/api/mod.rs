@@ -58,6 +58,29 @@ pub async fn run_server(
             "/v1/chat/completions",
             post(chat::chat_completions).options(chat::chat_options),
         )
+        .route("/v1/chat/conversations", get(chat::list_conversations))
+        .route("/v1/chat/conversations", post(chat::create_conversation))
+        .route(
+            "/v1/chat/conversations/:id/rename",
+            post(chat::rename_conversation),
+        )
+        .route(
+            "/v1/chat/conversations/:id/mode",
+            post(chat::set_conversation_mode),
+        )
+        .route(
+            "/v1/chat/conversations/:id/message",
+            post(chat::thread_message),
+        )
+        .route(
+            "/v1/chat/conversations/:id/tick",
+            post(chat::tick_conversation),
+        )
+        .route(
+            "/v1/chat/conversations/:id/archive",
+            post(chat::archive_conversation),
+        )
+        .route("/v1/chat/history", get(chat::chat_history))
         .merge(httpui::router::<AppState>())
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(1 << 20))

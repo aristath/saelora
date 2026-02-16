@@ -10,6 +10,10 @@ pub enum DbError {
     Unauthorized,
     #[error("token invalid or expired")]
     TokenInvalid,
+    #[error("invalid conversation")]
+    InvalidConversation,
+    #[error("not found")]
+    NotFound,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

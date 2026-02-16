@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use http_body_util::BodyExt as _;
@@ -505,6 +505,212 @@ async fn chat_requires_auth_and_errors_before_touching_backend() {
             .and_then(|m| m.as_str()),
         Some("no usable messages")
     );
+
+    // Authorized: conversation_id is required for thread isolation.
+    let body4 = Bytes::from(
+        serde_json::json!({
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+    );
+    let resp4 = chat::chat_completions(State(st.clone()), bearer_headers(&tok), body4).await;
+    assert_eq!(resp4.status(), StatusCode::BAD_REQUEST);
+    let v4 = resp_json(resp4).await;
+    assert_eq!(
+        v4.get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str()),
+        Some("missing conversation_id")
+    );
+
+    let body5 = Bytes::from(
+        serde_json::json!({
+            "conversation_id": "not valid!",
+            "messages": [{"role":"user","content":"hi"}]
+        })
+        .to_string(),
+    );
+    let resp5 = chat::chat_completions(State(st.clone()), bearer_headers(&tok), body5).await;
+    assert_eq!(resp5.status(), StatusCode::BAD_REQUEST);
+    let v5 = resp_json(resp5).await;
+    assert_eq!(
+        v5.get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str()),
+        Some("invalid conversation id")
+    );
+}
+
+#[tokio::test]
+async fn chat_history_requires_auth() {
+    let td = tempfile::tempdir().unwrap();
+    let data_dir = td.path().to_path_buf();
+    let st = test_state(&data_dir);
+
+    let resp = chat::chat_history(
+        State(st.clone()),
+        HeaderMap::new(),
+        Query(chat::ChatHistoryQuery::default()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn chat_history_returns_persisted_messages_for_user() {
+    let td = tempfile::tempdir().unwrap();
+    let data_dir = td.path().to_path_buf();
+    let st = test_state(&data_dir);
+
+    let (mgr, tok) = register_whitelisted(st.clone(), "history@example.com", "password123").await;
+    let us = mgr.users().unwrap();
+    let u = us.auth_user_from_token(&tok).unwrap();
+    let uds = mgr.user_data(&u.id).unwrap();
+    uds.append_user_message("hello there").unwrap();
+    uds.append_saelora_message("hey").unwrap();
+
+    let resp = chat::chat_history(
+        State(st.clone()),
+        bearer_headers(&tok),
+        Query(chat::ChatHistoryQuery {
+            limit: 100,
+            conversation_id: String::new(),
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = resp_json(resp).await;
+    let msgs = v
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .expect("messages array");
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0].get("role").and_then(|r| r.as_str()), Some("user"));
+    assert_eq!(
+        msgs[0].get("content").and_then(|c| c.as_str()),
+        Some("hello there")
+    );
+    assert_eq!(
+        msgs[1].get("role").and_then(|r| r.as_str()),
+        Some("assistant")
+    );
+    assert_eq!(msgs[1].get("content").and_then(|c| c.as_str()), Some("hey"));
+}
+
+#[tokio::test]
+async fn conversations_api_create_rename_archive_lifecycle() {
+    let td = tempfile::tempdir().unwrap();
+    let data_dir = td.path().to_path_buf();
+    let st = test_state(&data_dir);
+
+    let (_mgr, tok) = register_whitelisted(st.clone(), "threads@example.com", "password123").await;
+    let headers = bearer_headers(&tok);
+
+    let created = chat::create_conversation(
+        State(st.clone()),
+        headers.clone(),
+        Bytes::from(r#"{"title":"Thread A","mode":"hourly"}"#),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let cv = resp_json(created).await;
+    assert_eq!(
+        cv.get("conversation")
+            .and_then(|c| c.get("mode"))
+            .and_then(|m| m.as_str()),
+        Some("hourly")
+    );
+    let cid = cv
+        .get("conversation")
+        .and_then(|c| c.get("id"))
+        .and_then(|id| id.as_i64())
+        .unwrap();
+
+    let listed = chat::list_conversations(State(st.clone()), headers.clone()).await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let lv = resp_json(listed).await;
+    let arr = lv
+        .get("conversations")
+        .and_then(|v| v.as_array())
+        .expect("conversations");
+    assert!(arr
+        .iter()
+        .any(|c| c.get("id").and_then(|v| v.as_i64()) == Some(cid)));
+    assert!(arr.iter().any(|c| {
+        c.get("id").and_then(|v| v.as_i64()) == Some(cid)
+            && c.get("mode").and_then(|m| m.as_str()) == Some("hourly")
+    }));
+
+    let set_mode = chat::set_conversation_mode(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+        Bytes::from(r#"{"mode":"daily"}"#),
+    )
+    .await;
+    assert_eq!(set_mode.status(), StatusCode::OK);
+
+    let bad_mode = chat::set_conversation_mode(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+        Bytes::from(r#"{"mode":"nope"}"#),
+    )
+    .await;
+    assert_eq!(bad_mode.status(), StatusCode::BAD_REQUEST);
+
+    let queued = chat::thread_message(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+        Bytes::from(r#"{"content":"queued msg"}"#),
+    )
+    .await;
+    assert_eq!(queued.status(), StatusCode::OK);
+
+    let back_to_instant = chat::set_conversation_mode(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+        Bytes::from(r#"{"mode":"instant"}"#),
+    )
+    .await;
+    assert_eq!(back_to_instant.status(), StatusCode::OK);
+    let tick = chat::tick_conversation(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+    )
+    .await;
+    assert_eq!(tick.status(), StatusCode::OK);
+
+    let renamed = chat::rename_conversation(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+        Bytes::from(r#"{"title":"Renamed"}"#),
+    )
+    .await;
+    assert_eq!(renamed.status(), StatusCode::OK);
+
+    let archived = chat::archive_conversation(
+        State(st.clone()),
+        headers.clone(),
+        axum::extract::Path(cid.to_string()),
+    )
+    .await;
+    assert_eq!(archived.status(), StatusCode::OK);
+
+    let listed2 = chat::list_conversations(State(st.clone()), headers.clone()).await;
+    assert_eq!(listed2.status(), StatusCode::OK);
+    let lv2 = resp_json(listed2).await;
+    let arr2 = lv2
+        .get("conversations")
+        .and_then(|v| v.as_array())
+        .expect("conversations");
+    assert!(!arr2
+        .iter()
+        .any(|c| c.get("id").and_then(|v| v.as_i64()) == Some(cid)));
 }
 
 #[tokio::test]

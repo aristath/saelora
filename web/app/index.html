@@ -8,18 +8,13 @@
   </head>
   <body>
     <main class="app">
-      <header class="top">
-        <div class="brand">
-          <a class="home" href="/">Saelora</a>
-          <div class="sub">Chat</div>
+      <div class="statusbar">
+        <a class="statusbar-logo" href="/">Saelora</a>
+        <div class="statusbar-right">
+          <span class="statusbar-count" id="chatCount">Messages: 0</span>
+          <button class="statusbar-theme" type="button" id="themeToggle" aria-label="Toggle theme"></button>
         </div>
-        <div class="right">
-          <div class="status" id="status">connecting</div>
-          <button class="icon" type="button" id="themeToggle" aria-label="Toggle theme"></button>
-          <button class="ghost hidden" type="button" id="logout">Logout</button>
-        </div>
-      </header>
-
+      </div>
       <section class="panel hidden" id="view-login">
         <div class="panel-inner">
           <h1 class="h">Login</h1>
@@ -59,19 +54,34 @@
       </section>
 
       <section class="panel hidden" id="view-chat">
+        <div class="threadsbar">
+          <div class="thread-tabs" id="threadTabs"></div>
+          <div class="thread-mode-wrap" id="threadModeWrap">
+            <button class="thread-mode-btn" type="button" id="threadModeBtn" aria-label="Thread mode" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 7v5l3 2"></path>
+              </svg>
+              <span class="thread-mode-label" id="threadModeLabel">INS</span>
+            </button>
+            <div class="thread-mode-menu hidden" id="threadModeMenu" role="menu" aria-label="Select thread mode">
+              <button class="thread-mode-item" type="button" data-mode="instant" role="menuitemradio">instant</button>
+              <button class="thread-mode-item" type="button" data-mode="hourly" role="menuitemradio">hourly</button>
+              <button class="thread-mode-item" type="button" data-mode="daily" role="menuitemradio">daily</button>
+              <button class="thread-mode-item" type="button" data-mode="weekly" role="menuitemradio">weekly</button>
+            </div>
+          </div>
+          <button class="thread-btn" type="button" id="addThreadBtn" aria-label="New thread">+</button>
+          <button class="thread-btn" type="button" id="archiveThreadBtn">Archive</button>
+        </div>
         <div class="messages" id="messages"></div>
         <form class="composer" id="composer">
           <textarea
             id="input"
-            placeholder="Say it plainly."
-            rows="3"
+            rows="1"
             autocomplete="off"
             spellcheck="true"
           ></textarea>
-          <div class="row">
-            <button type="submit" id="send">Send</button>
-            <button type="button" id="stop" disabled>Stop</button>
-          </div>
         </form>
       </section>
     </main>

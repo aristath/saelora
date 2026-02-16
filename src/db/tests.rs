@@ -178,3 +178,87 @@ fn session_tokens_revoke_and_expire_and_require_active_user() {
         Err(DbError::Unauthorized)
     ));
 }
+
+#[test]
+fn per_user_databases_are_isolated_and_persist_messages() {
+    let (_td, mgr) = new_mgr();
+
+    let user1 = "user_1";
+    let user2 = "user_2";
+
+    let uds1 = mgr.user_data(user1).unwrap();
+    uds1.append_user_message("hello").unwrap();
+    uds1.append_saelora_message("hi there").unwrap();
+    // Blank content should be ignored.
+    uds1.append_user_message("   ").unwrap();
+
+    let uds2 = mgr.user_data(user2).unwrap();
+    uds2.append_user_message("other").unwrap();
+
+    // Re-open to verify data is actually persisted on disk.
+    let uds1_reopen = mgr.user_data(user1).unwrap();
+    let m1 = uds1_reopen.list_messages(100).unwrap();
+    assert_eq!(m1.len(), 2);
+    assert_eq!(m1[0].role, "user");
+    assert_eq!(m1[0].content, "hello");
+    assert_eq!(m1[1].role, "saelora");
+    assert_eq!(m1[1].content, "hi there");
+
+    let uds2_reopen = mgr.user_data(user2).unwrap();
+    let m2 = uds2_reopen.list_messages(100).unwrap();
+    assert_eq!(m2.len(), 1);
+    assert_eq!(m2[0].role, "user");
+    assert_eq!(m2[0].content, "other");
+
+    let p1 = mgr.user_data_db_path(user1).unwrap();
+    let p2 = mgr.user_data_db_path(user2).unwrap();
+    assert!(p1.exists());
+    assert!(p2.exists());
+    assert_ne!(p1, p2);
+}
+
+#[test]
+fn conversations_can_be_created_renamed_archived_and_have_scoped_history() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("user_threads").unwrap();
+
+    let c1 = uds
+        .create_conversation_with_mode("First", "hourly")
+        .unwrap();
+    let c2 = uds.create_conversation("Second").unwrap();
+    assert_ne!(c1.id, c2.id);
+    assert_eq!(c1.mode, "hourly");
+    assert_eq!(c2.mode, "instant");
+
+    uds.append_user_message_in(&c1.id.to_string(), "hello one")
+        .unwrap();
+    uds.append_saelora_message_in(&c1.id.to_string(), "reply one")
+        .unwrap();
+    uds.append_user_message_in(&c2.id.to_string(), "hello two")
+        .unwrap();
+
+    let m1 = uds.list_messages_in(&c1.id.to_string(), 100).unwrap();
+    assert_eq!(m1.len(), 2);
+    assert_eq!(m1[0].content, "hello one");
+    assert_eq!(m1[1].content, "reply one");
+
+    let m2 = uds.list_messages_in(&c2.id.to_string(), 100).unwrap();
+    assert_eq!(m2.len(), 1);
+    assert_eq!(m2[0].content, "hello two");
+
+    uds.rename_conversation(&c1.id.to_string(), "Renamed")
+        .unwrap();
+    uds.set_conversation_mode(&c1.id.to_string(), "daily")
+        .unwrap();
+    assert_eq!(uds.conversation_mode(&c1.id.to_string()).unwrap(), "daily");
+    let listed = uds.list_conversations(false, 100).unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed
+        .iter()
+        .any(|c| c.id == c1.id && c.title == "Renamed" && c.mode == "daily"));
+
+    uds.archive_conversation(&c1.id.to_string()).unwrap();
+    let listed2 = uds.list_conversations(false, 100).unwrap();
+    assert_eq!(listed2.len(), 1);
+    assert_eq!(listed2[0].id, c2.id);
+}

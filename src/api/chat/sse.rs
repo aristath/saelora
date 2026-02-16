@@ -6,7 +6,7 @@ use axum::body::Bytes;
 use axum::http::{header, StatusCode};
 use axum::response::Response;
 use futures::{Stream, StreamExt};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{db, openrouter};
 
@@ -19,6 +19,8 @@ pub(super) async fn stream_chat(
     req: openrouter::ChatCompletionRequest,
     public_id: String,
     public_created: i64,
+    user_id: String,
+    conversation_id: String,
 ) -> Response {
     let (status, headers, upstream) = match client.create_chat_completion_stream(&req).await {
         Ok(v) => v,
@@ -35,7 +37,14 @@ pub(super) async fn stream_chat(
         "chat: backend stream opened"
     );
 
-    let stream = rewrite_sse_stream(upstream, public_id, public_created, st.data_dir.clone());
+    let stream = rewrite_sse_stream(
+        upstream,
+        public_id,
+        public_created,
+        st.data_dir.clone(),
+        user_id,
+        conversation_id,
+    );
     let body = Body::from_stream(stream);
     let mut resp = Response::new(body);
     *resp.status_mut() = StatusCode::OK;
@@ -59,9 +68,12 @@ fn rewrite_sse_stream(
     public_id: String,
     public_created: i64,
     data_dir: PathBuf,
+    user_id: String,
+    conversation_id: String,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     try_stream! {
         let mut buf: Vec<u8> = Vec::new();
+        let mut assistant_content = String::new();
         futures::pin_mut!(upstream);
         while let Some(chunk) = upstream.next().await {
             let chunk = chunk.map_err(std::io::Error::other)?;
@@ -80,8 +92,23 @@ fn rewrite_sse_stream(
                     if let Ok(us) = mgr.users() {
                         let _ = us.incr_message_counts(0, 1);
                     }
+                    match mgr.user_data(&user_id) {
+                        Ok(uds) => {
+                            if let Err(e) =
+                                uds.append_saelora_message_in(&conversation_id, &assistant_content)
+                            {
+                                warn!(err=%e, user_id=%user_id, conversation_id=%conversation_id, "chat_stream: append saelora message failed");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(err=%e, user_id=%user_id, "chat_stream: user data open failed");
+                        }
+                    }
                     yield Bytes::from_static(b"data: [DONE]\n\n");
                     return;
+                }
+                if let Some(tok) = extract_delta_content(&data) {
+                    assistant_content.push_str(&tok);
                 }
 
                 let rewritten = rewrite_chunk_json(&data, &public_id, public_created);
@@ -150,4 +177,20 @@ fn rewrite_chunk_json(raw: &str, public_id: &str, public_created: i64) -> String
         }
     }
     serde_json::to_string(&v).unwrap_or_else(|_| raw.to_string())
+}
+
+fn extract_delta_content(raw: &str) -> Option<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return None;
+    };
+    let tok = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c0| c0.get("delta"))
+        .and_then(|d| d.get("content"))
+        .and_then(|c| c.as_str())?;
+    if tok.is_empty() {
+        return None;
+    }
+    Some(tok.to_string())
 }
