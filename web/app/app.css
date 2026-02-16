@@ -1,6 +1,13 @@
 :root {
-  --bg: #fff;
-  --fg: #000;
+  --bg: #dce0e8;
+  --surface: #e6e9ef;
+  --surface-alt: #eff1f5;
+  --fg: #4c4f69;
+  --muted: #5c5f77;
+  --border: #bcc0cc;
+  --accent: #1e66f5;
+  --accent-contrast: #eff1f5;
+  --focus: #1e66f5;
   --r: 4px;
 
   --base-font-size: 1.25rem;
@@ -21,20 +28,41 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000;
-    --fg: #fff;
+    --bg: #11111b;
+    --surface: #181825;
+    --surface-alt: #1e1e2e;
+    --fg: #cdd6f4;
+    --muted: #bac2de;
+    --border: #45475a;
+    --accent: #89b4fa;
+    --accent-contrast: #11111b;
+    --focus: #89b4fa;
   }
 }
 
 html[data-theme='light'] {
-  --bg: #fff;
-  --fg: #000;
+  --bg: #dce0e8;
+  --surface: #e6e9ef;
+  --surface-alt: #eff1f5;
+  --fg: #4c4f69;
+  --muted: #5c5f77;
+  --border: #bcc0cc;
+  --accent: #1e66f5;
+  --accent-contrast: #eff1f5;
+  --focus: #1e66f5;
   color-scheme: light;
 }
 
 html[data-theme='dark'] {
-  --bg: #000;
-  --fg: #fff;
+  --bg: #11111b;
+  --surface: #181825;
+  --surface-alt: #1e1e2e;
+  --fg: #cdd6f4;
+  --muted: #bac2de;
+  --border: #45475a;
+  --accent: #89b4fa;
+  --accent-contrast: #11111b;
+  --focus: #89b4fa;
   color-scheme: dark;
 }
 
@@ -142,13 +170,15 @@ h6 {
 .status {
   font-size: var(--step--2);
   padding: 0.3rem 0.45rem;
-  border: 1px solid var(--fg);
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: var(--r);
   white-space: nowrap;
 }
 
 .panel {
-  border: 1px solid var(--fg);
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: var(--r);
   overflow: hidden;
 }
@@ -201,7 +231,8 @@ h6 {
   max-width: min(720px, 92%);
   padding: 0.6rem 0.7rem;
   border-radius: var(--r);
-  border: 1px solid var(--fg);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
   white-space: pre-wrap;
   line-height: 1.35;
 }
@@ -220,8 +251,9 @@ h6 {
 }
 
 .composer {
-  border-top: 1px solid var(--fg);
+  border-top: 1px solid var(--border);
   padding: 0.7rem 0.8rem 0.8rem;
+  background: var(--surface);
 }
 
 textarea {
@@ -231,8 +263,8 @@ textarea {
   max-height: 11rem;
   padding: 0.55rem 0.55rem;
   border-radius: var(--r);
-  border: 1px solid var(--fg);
-  background: var(--bg);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
   color: var(--fg);
   outline: none;
   line-height: 1.35;
@@ -244,8 +276,8 @@ input {
   height: 2.2rem;
   padding: 0 0.55rem;
   border-radius: var(--r);
-  border: 1px solid var(--fg);
-  background: var(--bg);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
   color: var(--fg);
   outline: none;
   font: inherit;
@@ -255,7 +287,7 @@ textarea:focus,
 input:focus,
 button:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--fg);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -270,8 +302,8 @@ button {
   height: 2.2rem;
   padding: 0 0.7rem;
   border-radius: var(--r);
-  border: 1px solid var(--fg);
-  background: var(--bg);
+  border: 1px solid var(--border);
+  background: var(--surface);
   color: var(--fg);
   cursor: pointer;
   font-weight: 700;
@@ -280,8 +312,7 @@ button {
 }
 
 button:hover {
-  background: var(--fg);
-  color: var(--bg);
+  background: var(--surface-alt);
 }
 
 button:disabled {
@@ -290,8 +321,8 @@ button:disabled {
 }
 
 button:disabled:hover {
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--surface);
+  color: var(--muted);
 }
 
 .ghost {
