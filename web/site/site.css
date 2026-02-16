@@ -5,15 +5,13 @@
   --fg: #4c4f69;
   --muted: #5c5f77;
   --border: #bcc0cc;
-  --accent: #1e66f5;
+  --accent: #8839ef;
   --accent-contrast: #eff1f5;
-  --focus: #1e66f5;
+  --focus: #8839ef;
   --r: 4px;
 
   --base-font-size: 1.25rem;
   --type-scale-ratio: 1.15;
-  --step--2: calc(var(--base-font-size) / (var(--type-scale-ratio) * var(--type-scale-ratio)));
-  --step--1: calc(var(--base-font-size) / var(--type-scale-ratio));
   --step-0: var(--base-font-size);
   --step-1: calc(var(--step-0) * var(--type-scale-ratio));
   --step-2: calc(var(--step-1) * var(--type-scale-ratio));
@@ -35,9 +33,9 @@
     --fg: #cdd6f4;
     --muted: #bac2de;
     --border: #45475a;
-    --accent: #89b4fa;
+    --accent: #cba6f7;
     --accent-contrast: #11111b;
-    --focus: #89b4fa;
+    --focus: #cba6f7;
   }
 }
 
@@ -48,9 +46,9 @@ html[data-theme='light'] {
   --fg: #4c4f69;
   --muted: #5c5f77;
   --border: #bcc0cc;
-  --accent: #1e66f5;
+  --accent: #8839ef;
   --accent-contrast: #eff1f5;
-  --focus: #1e66f5;
+  --focus: #8839ef;
   color-scheme: light;
 }
 
@@ -61,9 +59,9 @@ html[data-theme='dark'] {
   --fg: #cdd6f4;
   --muted: #bac2de;
   --border: #45475a;
-  --accent: #89b4fa;
+  --accent: #cba6f7;
   --accent-contrast: #11111b;
-  --focus: #89b4fa;
+  --focus: #cba6f7;
   color-scheme: dark;
 }
 
@@ -186,12 +184,6 @@ h6 {
 
 .links a {
   text-decoration: none;
-  color: var(--fg);
-  font-size: var(--step--2);
-  padding: 0.45rem 0.6rem;
-  border-radius: var(--r);
-  border: 1px solid var(--border);
-  background: var(--surface);
 }
 
 .links a:hover {
@@ -208,15 +200,7 @@ h6 {
   display: block;
 }
 
-.kicker {
-  display: block;
-  font-size: var(--step--2);
-  letter-spacing: 0.03rem;
-  margin-bottom: 0.5rem;
-}
-
 .tagline {
-  font-size: var(--step--2);
   margin-bottom: 0.9rem;
 }
 
@@ -253,7 +237,6 @@ h1 {
   color: var(--fg);
   background: var(--surface);
   cursor: pointer;
-  font-size: var(--step--2);
   letter-spacing: 0.01rem;
   white-space: nowrap;
 }
@@ -305,18 +288,15 @@ a:focus-visible {
 
 .invite-status {
   margin-top: 0.6rem;
-  font-size: var(--step--2);
   min-height: 1.1rem;
 }
 
 .note {
   margin-top: 0.8rem;
-  font-size: var(--step--2);
 }
 
 .tiny {
   margin-top: 0.5rem;
-  font-size: var(--step--2);
   max-width: 70ch;
 }
 
