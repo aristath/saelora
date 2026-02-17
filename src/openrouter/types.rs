@@ -52,6 +52,57 @@ pub struct Usage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingRequest {
+    pub model: String,
+    pub input: EmbeddingInput,
+}
+
+impl EmbeddingRequest {
+    pub fn single(model: impl Into<String>, input: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            input: EmbeddingInput::String(input.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EmbeddingInput {
+    String(String),
+    Strings(Vec<String>),
+}
+
+impl EmbeddingInput {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::String(s) => s.trim().is_empty(),
+            Self::Strings(v) => v.iter().all(|s| s.trim().is_empty()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingResponse {
+    #[serde(default)]
+    pub object: String,
+    pub data: Vec<EmbeddingData>,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingData {
+    #[serde(default)]
+    pub object: String,
+    pub embedding: Vec<f32>,
+    #[serde(default)]
+    pub index: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelsResponse {
     pub data: Vec<Model>,
 }
@@ -180,5 +231,13 @@ mod tests {
         let m2: Model = serde_json::from_str(many).unwrap();
         assert_eq!(m2.pricing.prompt, "0.1");
         assert_eq!(m2.pricing.input_cache_write, "0.5");
+    }
+
+    #[test]
+    fn embedding_input_empty_detection() {
+        assert!(EmbeddingInput::String("   ".to_string()).is_empty());
+        assert!(!EmbeddingInput::String("hello".to_string()).is_empty());
+        assert!(EmbeddingInput::Strings(vec![" ".to_string(), "\n".to_string()]).is_empty());
+        assert!(!EmbeddingInput::Strings(vec!["x".to_string()]).is_empty());
     }
 }

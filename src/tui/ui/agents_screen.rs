@@ -27,13 +27,13 @@ pub(super) fn draw_agents(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Style::default().fg(THEME.text).add_modifier(Modifier::BOLD),
     )]));
     let help = Paragraph::new(Line::from(vec![Span::styled(
-        "Up/Down: select | Tab: next field | P: toggle provider | N: new | D: delete | C: set chat | Y: set summary | Ctrl+S save | Esc back",
+        "Up/Down: select | Tab: next field | P: toggle provider | C/Y/M/E: bind task | Ctrl+S save | Esc back",
         Style::default().fg(THEME.sub),
     )]));
     let tasks = Paragraph::new(Line::from(vec![Span::styled(
         format!(
-            "Chat agent: {}   ·   Summary agent: {}",
-            app.task_chat, app.task_summary
+            "Chat: {}   Summary: {}   Curator: {}   Embed: {}",
+            app.task_chat, app.task_summary, app.task_memory_curator, app.task_memory_embed
         ),
         Style::default().fg(THEME.sub),
     )]));
@@ -141,10 +141,12 @@ fn draw_agent_modal(f: &mut ratatui::Frame, area: Rect, app: &App) {
         render_field("X-Title:", &agent.x_title, app.agent_focus == 6),
         render_field("Bind chat (C):", "", app.agent_focus == 7),
         render_field("Bind summary (Y):", "", app.agent_focus == 8),
+        render_field("Bind memory curator (M):", "", app.agent_focus == 9),
+        render_field("Bind memory embed (E):", "", app.agent_focus == 10),
     ];
 
     let hint = Line::from(Span::styled(
-        "Up/Down: focus | Type: edit | Enter: toggle/list/select | Ctrl+S save | Esc close",
+        "Up/Down: focus | Type: edit | Enter: toggle/list/select | C/Y/M/E bind selected task | Ctrl+S save | Esc close",
         Style::default().fg(THEME.sub),
     ));
     let mut content: Vec<Line<'static>> = rows;

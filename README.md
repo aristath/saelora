@@ -57,7 +57,18 @@ Ctrl+C quits; Esc backs out of a screen; Ctrl+S saves in config screens.
 ## Agents & models
 
 - Configure multiple agents (OpenRouter or Ollama) in the TUI “Agents” screen.
-- Assign different agents per task (chat, summary). Chat API uses the configured chat agent.
+- Assign different agents per task:
+  - `chat`
+  - `summary`
+  - `memory curator`
+  - `memory embed`
+
+## Long-term memory
+
+- Every persisted user message can be embedded and ingested into per-user memory tables.
+- Memory statements are scored on a continuous `belief_score` scale (no binary fact/claim threshold).
+- Each statement keeps evidence links to source message IDs.
+- Chat context is enriched with top relevant memory hints per request.
 
 ## Chat API
 

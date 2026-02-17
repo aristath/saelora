@@ -212,6 +212,8 @@ mod tests {
             agent_focus: 0,
             task_chat: String::new(),
             task_summary: String::new(),
+            task_memory_curator: String::new(),
+            task_memory_embed: String::new(),
             agent_modal: false,
             agent_modal_idx: None,
             agent_models: vec![],

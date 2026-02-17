@@ -12,6 +12,8 @@ pub enum DbError {
     TokenInvalid,
     #[error("invalid conversation")]
     InvalidConversation,
+    #[error("invalid data: {0}")]
+    InvalidData(String),
     #[error("not found")]
     NotFound,
     #[error(transparent)]

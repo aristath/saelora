@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use tracing::{info, warn};
 
-use crate::{config, openrouter};
+use crate::{agents, config, openrouter};
 
 use super::super::errors;
 use super::super::AppState;
@@ -13,80 +13,9 @@ use super::super::AppState;
 pub(super) fn client_from_disk(
     data_dir: &Path,
 ) -> anyhow::Result<(config::Settings, openrouter::Client, String)> {
-    let path = config::settings_path(data_dir);
-    let mut cfg: config::Settings = match std::fs::read(&path) {
-        Ok(b) => serde_json::from_slice(&b)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Create a default config on first run so the server can serve immediately.
-            let s = config::default_settings();
-            let _ = config::save_settings(&path, &s);
-            s
-        }
-        Err(e) => return Err(anyhow::anyhow!(e)),
-    };
-
-    if cfg.agents.is_empty() {
-        // Settings should always include at least one agent; if they don't, fall back to defaults.
-        let s = config::default_settings();
-        cfg.agents = s.agents;
-        if cfg.tasks.chat_agent.is_empty() {
-            cfg.tasks.chat_agent = cfg
-                .agents
-                .first()
-                .map(|a| a.name.clone())
-                .unwrap_or_default();
-        }
-        if cfg.tasks.summary_agent.is_empty() {
-            cfg.tasks.summary_agent = cfg
-                .agents
-                .first()
-                .map(|a| a.name.clone())
-                .unwrap_or_default();
-        }
-    }
-    if cfg.chat.system_prompt.trim().is_empty() {
-        cfg.chat.system_prompt = config::DEFAULT_SYSTEM_PROMPT.trim().to_string();
-    }
-    let agent = cfg
-        .resolve_agent("chat")
-        .ok_or_else(|| anyhow::anyhow!("no agents configured"))?;
-    if !cfg.agents.iter().any(|a| a.name == cfg.tasks.chat_agent) {
-        tracing::warn!(
-            configured = %cfg.tasks.chat_agent,
-            fallback = %agent.name,
-            "chat agent binding not found; using fallback"
-        );
-    }
-    let base_url = agent.openai_base_url();
-    info!(
-        agent = %agent.name,
-        provider = ?agent.provider,
-        base_url = %base_url,
-        model = %agent.model,
-        "chat backend selected"
-    );
-
-    let client = openrouter::Client::new(openrouter::Config {
-        api_key: agent.api_key.clone(),
-        base_url,
-        http_referer: if matches!(agent.provider, config::Provider::OpenRouter) {
-            agent.http_referer.clone()
-        } else {
-            String::new()
-        },
-        x_title: if matches!(agent.provider, config::Provider::OpenRouter) {
-            agent.x_title.clone()
-        } else {
-            String::new()
-        },
-    })?;
-
-    let model = if agent.model.trim().is_empty() {
-        "openai/gpt-4o-mini".to_string()
-    } else {
-        agent.model.trim().to_string()
-    };
-    Ok((cfg, client, model))
+    let resolved = agents::client_for_task_from_disk(data_dir, "chat")?;
+    info!(model = %resolved.model, "chat backend selected");
+    Ok((resolved.settings, resolved.client, resolved.model))
 }
 
 pub(super) fn backend_error(e: &openrouter::HttpError) -> Response {

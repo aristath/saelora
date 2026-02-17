@@ -20,6 +20,8 @@ pub(super) fn collect_settings(app: &App) -> config::Settings {
     s.agents = app.agents.clone();
     s.tasks.chat_agent = app.task_chat.clone();
     s.tasks.summary_agent = app.task_summary.clone();
+    s.tasks.memory_curator_agent = app.task_memory_curator.clone();
+    s.tasks.memory_embed_agent = app.task_memory_embed.clone();
 
     // Keep task bindings valid even if agents were renamed.
     if let Some(first) = s.agents.first() {
@@ -28,6 +30,20 @@ pub(super) fn collect_settings(app: &App) -> config::Settings {
         }
         if !s.agents.iter().any(|a| a.name == s.tasks.summary_agent) {
             s.tasks.summary_agent = first.name.clone();
+        }
+        if !s
+            .agents
+            .iter()
+            .any(|a| a.name == s.tasks.memory_curator_agent)
+        {
+            s.tasks.memory_curator_agent = first.name.clone();
+        }
+        if !s
+            .agents
+            .iter()
+            .any(|a| a.name == s.tasks.memory_embed_agent)
+        {
+            s.tasks.memory_embed_agent = first.name.clone();
         }
     }
 

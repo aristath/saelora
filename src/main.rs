@@ -1,8 +1,10 @@
+mod agents;
 mod api;
 mod config;
 mod db;
 mod email;
 mod httpui;
+mod memory;
 mod openrouter;
 mod tui;
 

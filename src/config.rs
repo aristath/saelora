@@ -82,6 +82,10 @@ pub struct TaskBindings {
     pub chat_agent: String,
     #[serde(default)]
     pub summary_agent: String,
+    #[serde(default)]
+    pub memory_curator_agent: String,
+    #[serde(default)]
+    pub memory_embed_agent: String,
 }
 
 impl Agent {
@@ -141,6 +145,8 @@ pub fn default_settings() -> Settings {
         tasks: TaskBindings {
             chat_agent: default_agent.name.clone(),
             summary_agent: default_agent.name.clone(),
+            memory_curator_agent: default_agent.name.clone(),
+            memory_embed_agent: default_agent.name.clone(),
         },
     }
 }
@@ -160,6 +166,22 @@ impl Settings {
     pub fn resolve_agent(&self, task: &str) -> Option<Agent> {
         let target = match task {
             "summary" => &self.tasks.summary_agent,
+            "memory_curator" => {
+                if self.tasks.memory_curator_agent.trim().is_empty() {
+                    &self.tasks.summary_agent
+                } else {
+                    &self.tasks.memory_curator_agent
+                }
+            }
+            "memory_embed" => {
+                if !self.tasks.memory_embed_agent.trim().is_empty() {
+                    &self.tasks.memory_embed_agent
+                } else if !self.tasks.memory_curator_agent.trim().is_empty() {
+                    &self.tasks.memory_curator_agent
+                } else {
+                    &self.tasks.summary_agent
+                }
+            }
             _ => &self.tasks.chat_agent,
         };
         if let Some(a) = self.agents.iter().find(|a| a.name == *target) {
@@ -268,5 +290,19 @@ mod tests {
         assert_eq!(s2.agents[0].model, "x-ai/grok-4.1-fast");
         assert_eq!(s2.chat.system_prompt, "hello");
         assert!(!s2.agents.is_empty());
+    }
+
+    #[test]
+    fn resolve_agent_supports_memory_task_fallbacks() {
+        let mut s = default_settings();
+        s.tasks.memory_curator_agent.clear();
+        s.tasks.memory_embed_agent.clear();
+
+        let summary = s.resolve_agent("summary").unwrap();
+        let curator = s.resolve_agent("memory_curator").unwrap();
+        let embed = s.resolve_agent("memory_embed").unwrap();
+
+        assert_eq!(curator.name, summary.name);
+        assert_eq!(embed.name, summary.name);
     }
 }

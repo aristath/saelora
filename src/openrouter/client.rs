@@ -6,7 +6,8 @@ use reqwest::StatusCode;
 
 use super::error::HttpError;
 use super::types::{
-    ChatCompletionRequest, ChatCompletionResponse, KeyInfo, KeyInfoResponse, Model, ModelsResponse,
+    ChatCompletionRequest, ChatCompletionResponse, EmbeddingRequest, EmbeddingResponse, KeyInfo,
+    KeyInfoResponse, Model, ModelsResponse,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -121,6 +122,35 @@ impl Client {
             return Err(HttpError::from_api(status, &body));
         }
         let out: ChatCompletionResponse =
+            serde_json::from_slice(&body).map_err(|e| HttpError::parse(e, &body))?;
+        Ok(out)
+    }
+
+    pub async fn create_embedding(
+        &self,
+        req: &EmbeddingRequest,
+    ) -> Result<EmbeddingResponse, HttpError> {
+        if req.model.trim().is_empty() {
+            return Err(HttpError::client("openrouter: missing model"));
+        }
+        if req.input.is_empty() {
+            return Err(HttpError::client("openrouter: missing input"));
+        }
+
+        let url = format!("{}/embeddings", self.base_url);
+        let resp = self
+            .auth_headers(self.http.post(url))
+            .header("Content-Type", "application/json")
+            .json(req)
+            .send()
+            .await
+            .map_err(HttpError::transport)?;
+        let status = resp.status();
+        let body = resp.bytes().await.map_err(HttpError::transport)?;
+        if !status.is_success() {
+            return Err(HttpError::from_api(status, &body));
+        }
+        let out: EmbeddingResponse =
             serde_json::from_slice(&body).map_err(|e| HttpError::parse(e, &body))?;
         Ok(out)
     }

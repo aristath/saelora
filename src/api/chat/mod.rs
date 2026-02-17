@@ -10,7 +10,7 @@ use axum::Json;
 use chrono::Utc;
 use tracing::{info, warn};
 
-use crate::{config, db, openrouter};
+use crate::{config, db, memory, openrouter};
 
 use super::{auth, errors, AppState};
 
@@ -186,6 +186,7 @@ pub(super) async fn chat_completions(
     }
 
     let mgr = db::Manager::new(st.data_dir.clone());
+    let mut appended_user_message_id: Option<i64> = None;
     let history_messages: Vec<openrouter::Message> = {
         let uds = match mgr.user_data(&u.id) {
             Ok(v) => v,
@@ -240,7 +241,7 @@ pub(super) async fn chat_completions(
         // Persist the latest user turn first, then build model context from this conversation only.
         if let Some(text) = latest_user_content.as_ref() {
             match uds.append_user_message_in(&conversation_id, text) {
-                Ok(()) => {}
+                Ok(id) => appended_user_message_id = Some(id),
                 Err(db::DbError::InvalidConversation) => {
                     return errors::openai_error(
                         StatusCode::BAD_REQUEST,
@@ -307,6 +308,15 @@ pub(super) async fn chat_completions(
             .collect()
     };
 
+    if let Some(message_id) = appended_user_message_id {
+        memory::spawn_ingest_user_message(
+            st.data_dir.clone(),
+            u.id.clone(),
+            conversation_id.clone(),
+            message_id,
+        );
+    }
+
     let (cfg, client, backend_model) = match backend::client_from_disk(&st.data_dir) {
         Ok(v) => v,
         Err(e) => {
@@ -328,10 +338,21 @@ pub(super) async fn chat_completions(
             s.to_string()
         }
     };
+    let memory_context = if let Some(text) = latest_user_content.clone() {
+        memory::build_memory_context(
+            st.data_dir.clone(),
+            u.id.clone(),
+            conversation_id.clone(),
+            text,
+        )
+        .await
+    } else {
+        None
+    };
 
     let mut or_req = openrouter::ChatCompletionRequest {
         model: backend_model.clone(),
-        messages: Vec::with_capacity(history_messages.len() + 1),
+        messages: Vec::with_capacity(history_messages.len() + 2),
         // Do not expose model controls over the public API (keep chat surface minimal and stable).
         temperature: None,
         max_tokens: None,
@@ -341,6 +362,12 @@ pub(super) async fn chat_completions(
         role: "system".to_string(),
         content: system_prompt,
     });
+    if let Some(ctx) = memory_context {
+        or_req.messages.push(openrouter::Message {
+            role: "system".to_string(),
+            content: ctx,
+        });
+    }
     or_req.messages.extend(history_messages.clone());
 
     let public_id = format!("saelora-{}", Utc::now().format("%Y%m%dT%H%M%S%.3fZ"));
@@ -699,7 +726,14 @@ pub(super) async fn thread_message(
         }
     };
     match uds.append_user_message_in(&conversation_id, content) {
-        Ok(()) => {}
+        Ok(message_id) => {
+            memory::spawn_ingest_user_message(
+                st.data_dir.clone(),
+                u.id.clone(),
+                conversation_id.clone(),
+                message_id,
+            );
+        }
         Err(db::DbError::InvalidConversation) => {
             return errors::auth_error(StatusCode::BAD_REQUEST, "invalid conversation id");
         }
@@ -874,9 +908,22 @@ pub(super) async fn tick_conversation(
             s.to_string()
         }
     };
+    let latest_user_text = rows
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let memory_context = memory::build_memory_context(
+        st.data_dir.clone(),
+        u.id.clone(),
+        conversation_id.clone(),
+        latest_user_text,
+    )
+    .await;
     let mut or_req = openrouter::ChatCompletionRequest {
         model: backend_model,
-        messages: Vec::with_capacity(history_messages.len() + 1),
+        messages: Vec::with_capacity(history_messages.len() + 2),
         temperature: None,
         max_tokens: None,
         stream: false,
@@ -885,6 +932,12 @@ pub(super) async fn tick_conversation(
         role: "system".to_string(),
         content: system_prompt,
     });
+    if let Some(ctx) = memory_context {
+        or_req.messages.push(openrouter::Message {
+            role: "system".to_string(),
+            content: ctx,
+        });
+    }
     or_req.messages.extend(history_messages);
 
     let resp = match client.create_chat_completion(&or_req).await {

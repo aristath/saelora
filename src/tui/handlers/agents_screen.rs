@@ -104,10 +104,10 @@ fn handle_agent_modal_key(
             app.agent_modal_idx = None;
         }
         KeyCode::Tab | KeyCode::Down => {
-            app.agent_focus = (app.agent_focus + 1) % 9;
+            app.agent_focus = (app.agent_focus + 1) % 11;
         }
         KeyCode::BackTab | KeyCode::Up => {
-            app.agent_focus = (app.agent_focus + 8) % 9;
+            app.agent_focus = (app.agent_focus + 10) % 11;
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
             if app.agent_focus == 1 {
@@ -116,6 +116,10 @@ fn handle_agent_modal_key(
                 app.task_chat = app.agents[idx].name.clone();
             } else if app.agent_focus == 8 {
                 app.task_summary = app.agents[idx].name.clone();
+            } else if app.agent_focus == 9 {
+                app.task_memory_curator = app.agents[idx].name.clone();
+            } else if app.agent_focus == 10 {
+                app.task_memory_embed = app.agents[idx].name.clone();
             } else if app.agent_focus == 2 && !app.loading_agent_models {
                 match app.agents[idx].provider {
                     config::Provider::OpenRouter => {
@@ -165,6 +169,18 @@ fn handle_agent_modal_key(
             app.agent_modal = false;
             app.agent_modal_idx = None;
         }
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            app.task_chat = app.agents[idx].name.clone();
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            app.task_summary = app.agents[idx].name.clone();
+        }
+        KeyCode::Char('m') | KeyCode::Char('M') => {
+            app.task_memory_curator = app.agents[idx].name.clone();
+        }
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            app.task_memory_embed = app.agents[idx].name.clone();
+        }
         _ => {
             // Text edits.
             let target_opt = match app.agent_focus {
@@ -175,7 +191,7 @@ fn handle_agent_modal_key(
                 4 => Some(&mut app.agents[idx].api_key),
                 5 => Some(&mut app.agents[idx].http_referer),
                 6 => Some(&mut app.agents[idx].x_title),
-                7 | 8 => None,
+                7..=10 => None,
                 _ => None,
             };
             if let Some(target) = target_opt {
@@ -203,7 +219,13 @@ fn handle_agent_modal_key(
                         app.task_chat = new_name.clone();
                     }
                     if app.task_summary == old {
-                        app.task_summary = new_name;
+                        app.task_summary = new_name.clone();
+                    }
+                    if app.task_memory_curator == old {
+                        app.task_memory_curator = new_name.clone();
+                    }
+                    if app.task_memory_embed == old {
+                        app.task_memory_embed = new_name;
                     }
                 }
             }
@@ -405,6 +427,8 @@ mod tests {
             agent_focus: 0,
             task_chat: String::new(),
             task_summary: String::new(),
+            task_memory_curator: String::new(),
+            task_memory_embed: String::new(),
             agent_modal: false,
             agent_modal_idx: None,
             agent_models: vec![],

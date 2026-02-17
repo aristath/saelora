@@ -262,3 +262,84 @@ fn conversations_can_be_created_renamed_archived_and_have_scoped_history() {
     assert_eq!(listed2.len(), 1);
     assert_eq!(listed2[0].id, c2.id);
 }
+
+#[test]
+fn memory_tables_store_embeddings_scores_and_links() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("memory_user").unwrap();
+
+    let m1 = uds
+        .append_user_message("I slipped and hurt my foot")
+        .unwrap();
+    let m2 = uds.append_user_message("Foot still hurts today").unwrap();
+    assert!(m1 > 0);
+    assert!(m2 > m1);
+
+    assert!(matches!(
+        uds.upsert_message_embedding(m1, "embed-model", &[]),
+        Err(DbError::InvalidData(_))
+    ));
+
+    uds.upsert_message_embedding(m1, "embed-model", &[0.1, 0.2, 0.3])
+        .unwrap();
+    let emb = uds
+        .message_embedding(m1)
+        .unwrap()
+        .expect("embedding present");
+    assert_eq!(emb.message_id, m1);
+    assert_eq!(emb.embedding.len(), 3);
+
+    let sid = uds
+        .apply_memory_patch(MemoryPatch {
+            statement_id: 0,
+            text: "User hurt their foot",
+            delta: 0.7,
+            salience: 0.8,
+            confidence: 0.9,
+            message_id: m1,
+            note: "explicit statement",
+            embedding: &[0.5, 0.1, 0.2],
+        })
+        .unwrap();
+    uds.apply_memory_patch(MemoryPatch {
+        statement_id: sid,
+        text: "User hurt their foot",
+        delta: 0.4,
+        salience: 0.9,
+        confidence: 0.8,
+        message_id: m2,
+        note: "follow-up",
+        embedding: &[0.52, 0.08, 0.21],
+    })
+    .unwrap();
+
+    let sid2 = uds
+        .apply_memory_patch(MemoryPatch {
+            statement_id: 0,
+            text: "User drinks beer occasionally",
+            delta: 0.2,
+            salience: 0.4,
+            confidence: 0.6,
+            message_id: m2,
+            note: "mentioned beer",
+            embedding: &[0.01, 0.9, 0.3],
+        })
+        .unwrap();
+
+    uds.upsert_memory_link(sid, sid2, "related", 0.6).unwrap();
+    // Same link reversed should update the same row instead of duplicating.
+    uds.upsert_memory_link(sid2, sid, "related", 0.7).unwrap();
+
+    let rows = uds.list_memory_statements_with_embeddings(10).unwrap();
+    let foot = rows
+        .iter()
+        .find(|(s, _)| s.id == sid)
+        .map(|(s, _)| s.clone())
+        .expect("foot statement exists");
+    assert_eq!(foot.evidence_count, 2);
+    assert_eq!(foot.last_seen_message_id, m2);
+    assert!(foot.belief_score > 1.0);
+    assert!((foot.salience - 0.9).abs() < 0.0001);
+
+    assert_eq!(uds.count_memory_links().unwrap(), 1);
+}

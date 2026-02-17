@@ -96,6 +96,12 @@ fn open_openrouter_config(app: &mut App) {
                 .map(|a| a.name.clone())
                 .unwrap_or_default();
         }
+        if app.task_memory_curator.trim().is_empty() {
+            app.task_memory_curator = app.task_summary.clone();
+        }
+        if app.task_memory_embed.trim().is_empty() {
+            app.task_memory_embed = app.task_memory_curator.clone();
+        }
     }
 
     // Prefer the current chat agent if it's OpenRouter.
