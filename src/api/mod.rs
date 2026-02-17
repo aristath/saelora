@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod chat;
 mod cors;
@@ -54,6 +55,16 @@ pub async fn run_server(
         .route("/v1/auth/login", post(auth::auth_login))
         .route("/v1/auth/logout", post(auth::auth_logout))
         .route("/v1/auth/me", get(auth::auth_me))
+        .route("/v1/admin/overview", get(admin::overview))
+        .route(
+            "/v1/admin/config",
+            get(admin::get_config).post(admin::save_config),
+        )
+        .route("/v1/admin/invites", get(admin::list_invites))
+        .route("/v1/admin/invites/approve", post(admin::approve_invite))
+        .route("/v1/admin/invites/remove", post(admin::remove_invite))
+        .route("/v1/admin/users", get(admin::list_users))
+        .route("/v1/admin/users/status", post(admin::set_user_status))
         .route(
             "/v1/chat/completions",
             post(chat::chat_completions).options(chat::chat_options),

@@ -13,8 +13,18 @@ struct SiteAssets;
 #[folder = "web/app"]
 struct AppAssets;
 
+#[derive(RustEmbed)]
+#[folder = "web/admin"]
+struct AdminAssets;
+
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
+        .route(
+            "/_saelora-admin",
+            get(|| async { Redirect::permanent("/_saelora-admin/") }),
+        )
+        .route("/_saelora-admin/", get(admin_index))
+        .route("/_saelora-admin/*path", any(admin_asset_any))
         .route("/app", get(|| async { Redirect::permanent("/app/") }))
         .route("/app/", get(app_index))
         .route("/app/*path", any(app_asset_any))
@@ -70,6 +80,31 @@ async fn app_asset_any(
         return StatusCode::NOT_FOUND.into_response();
     }
     app_asset(axum::extract::Path(path)).await
+}
+
+async fn admin_index() -> Response {
+    serve_embedded::<AdminAssets>("index.html")
+}
+
+async fn admin_asset(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    let p = clean_path(&path);
+    if p.is_empty() {
+        return serve_embedded::<AdminAssets>("index.html");
+    }
+    if is_unsafe_path(&p) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    serve_embedded::<AdminAssets>(&p)
+}
+
+async fn admin_asset_any(
+    method: Method,
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    admin_asset(axum::extract::Path(path)).await
 }
 
 fn serve_embedded<A: RustEmbed>(path: &str) -> Response {

@@ -32,6 +32,11 @@ The website (`/`) and minimal chat app (`/app/`) are served by the Rust binary a
 Source files live in:
 - `web/site/`
 - `web/app/`
+- `web/admin/` (hidden admin console)
+
+Hidden admin console:
+- `/_saelora-admin/`
+- Access is restricted to the primary admin account (the first registered active user).
 
 ## TUI (admin)
 

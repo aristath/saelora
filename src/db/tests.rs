@@ -180,6 +180,22 @@ fn session_tokens_revoke_and_expire_and_require_active_user() {
 }
 
 #[test]
+fn earliest_active_user_is_admin() {
+    let (_td, mgr) = new_mgr();
+    let us = mgr.users().unwrap();
+
+    let ph = hash_password("password123").unwrap();
+    let admin_id = us.create_user("admin@example.com", &ph, "active").unwrap();
+    let other_id = us.create_user("other@example.com", &ph, "active").unwrap();
+
+    assert!(us.is_admin_user(&admin_id).unwrap());
+    assert!(!us.is_admin_user(&other_id).unwrap());
+
+    us.set_user_status(&admin_id, "disabled").unwrap();
+    assert!(!us.is_admin_user(&admin_id).unwrap());
+}
+
+#[test]
 fn per_user_databases_are_isolated_and_persist_messages() {
     let (_td, mgr) = new_mgr();
 

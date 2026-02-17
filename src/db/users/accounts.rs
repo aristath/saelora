@@ -150,4 +150,22 @@ impl UsersStore {
         }
         Ok(())
     }
+
+    pub fn is_admin_user(&self, user_id: &str) -> Result<bool, DbError> {
+        let uid = user_id.trim();
+        if uid.is_empty() {
+            return Ok(false);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, status FROM users ORDER BY rowid ASC LIMIT 1")?;
+        let row = stmt.query_row(params![], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        });
+        match row {
+            Ok((admin_id, status)) => Ok(admin_id == uid && status == "active"),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(DbError::Sql(e)),
+        }
+    }
 }

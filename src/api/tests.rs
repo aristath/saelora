@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use crate::config;
 use crate::db;
 
+use super::admin;
 use super::auth;
 use super::chat;
 use super::cors;
@@ -776,4 +777,114 @@ async fn cors_allows_localhost_and_public_base_only() {
     assert!(cors::is_allowed_origin("http://127.0.0.1:5173", &data_dir));
     assert!(cors::is_allowed_origin("https://saelora.ai", &data_dir));
     assert!(!cors::is_allowed_origin("https://evil.example", &data_dir));
+}
+
+#[tokio::test]
+async fn admin_endpoints_require_primary_admin_user() {
+    let td = tempfile::tempdir().unwrap();
+    let data_dir = td.path().to_path_buf();
+    let st = test_state(&data_dir);
+
+    let (_mgr, tok_admin) =
+        register_whitelisted(st.clone(), "admin1@example.com", "password123").await;
+    let (_mgr2, tok_other) =
+        register_whitelisted(st.clone(), "admin2@example.com", "password123").await;
+
+    // First account is admin.
+    let ok = admin::overview(State(st.clone()), bearer_headers(&tok_admin)).await;
+    assert_eq!(ok.status(), StatusCode::OK);
+
+    // Other account is forbidden.
+    let no = admin::overview(State(st.clone()), bearer_headers(&tok_other)).await;
+    assert_eq!(no.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_can_manage_config_invites_and_user_status() {
+    let td = tempfile::tempdir().unwrap();
+    let data_dir = td.path().to_path_buf();
+    let st = test_state(&data_dir);
+    let mgr = db::Manager::new(data_dir.clone());
+
+    let (_mgr, tok_admin) =
+        register_whitelisted(st.clone(), "admin3@example.com", "password123").await;
+    let h = bearer_headers(&tok_admin);
+
+    // Config read/write.
+    let cfg_resp = admin::get_config(State(st.clone()), h.clone()).await;
+    assert_eq!(cfg_resp.status(), StatusCode::OK);
+    let mut cfg_json = resp_json(cfg_resp).await;
+    let mut settings = serde_json::from_value::<config::Settings>(
+        cfg_json.get("settings").cloned().unwrap_or_default(),
+    )
+    .unwrap();
+    settings.public_base = "https://saelora.ai".to_string();
+    let save_resp = admin::save_config(
+        State(st.clone()),
+        h.clone(),
+        Bytes::from(serde_json::json!({ "settings": settings }).to_string()),
+    )
+    .await;
+    assert_eq!(save_resp.status(), StatusCode::OK);
+
+    let settings_reloaded = config::load_settings(&config::settings_path(&data_dir)).unwrap();
+    assert_eq!(settings_reloaded.public_base, "https://saelora.ai");
+
+    // Invite approve/remove.
+    mgr.waitlist_add("invitee@example.com").unwrap();
+    let inv_resp = admin::list_invites(State(st.clone()), h.clone()).await;
+    assert_eq!(inv_resp.status(), StatusCode::OK);
+    cfg_json = resp_json(inv_resp).await;
+    let pending = cfg_json
+        .get("pending")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(pending
+        .iter()
+        .any(|r| { r.get("email").and_then(|e| e.as_str()) == Some("invitee@example.com") }));
+
+    let approve_resp = admin::approve_invite(
+        State(st.clone()),
+        h.clone(),
+        Bytes::from(r#"{"email":"invitee@example.com"}"#),
+    )
+    .await;
+    assert_eq!(approve_resp.status(), StatusCode::OK);
+    assert!(mgr.whitelist_has("invitee@example.com").unwrap());
+
+    let remove_resp = admin::remove_invite(
+        State(st.clone()),
+        h.clone(),
+        Bytes::from(r#"{"email":"invitee@example.com","list":"whitelist"}"#),
+    )
+    .await;
+    assert_eq!(remove_resp.status(), StatusCode::OK);
+    assert!(!mgr.whitelist_has("invitee@example.com").unwrap());
+
+    // User status.
+    let (_mgr2, tok_user) =
+        register_whitelisted(st.clone(), "user-status@example.com", "password123").await;
+    let me_before = auth::auth_me(State(st.clone()), bearer_headers(&tok_user)).await;
+    assert_eq!(me_before.status(), StatusCode::OK);
+
+    let us = mgr.users().unwrap();
+    let user_row = us
+        .list_users()
+        .unwrap()
+        .into_iter()
+        .find(|u| u.email == "user-status@example.com")
+        .unwrap();
+    let status_resp = admin::set_user_status(
+        State(st.clone()),
+        h.clone(),
+        Bytes::from(
+            serde_json::json!({ "user_id": user_row.id, "status": "disabled" }).to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status_resp.status(), StatusCode::OK);
+
+    let me_after = auth::auth_me(State(st.clone()), bearer_headers(&tok_user)).await;
+    assert_eq!(me_after.status(), StatusCode::UNAUTHORIZED);
 }
