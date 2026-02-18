@@ -4,5 +4,4 @@ set -eu
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
 
-exec "$ROOT/scripts/cargo" run -- "$@"
-
+exec "$ROOT/scripts/cargo" run --release -- "$@"

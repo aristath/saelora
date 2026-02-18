@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_stream::try_stream;
 use axum::body::Body;
@@ -74,9 +74,23 @@ fn rewrite_sse_stream(
     try_stream! {
         let mut buf: Vec<u8> = Vec::new();
         let mut assistant_content = String::new();
+        let mut persisted = false;
         futures::pin_mut!(upstream);
         while let Some(chunk) = upstream.next().await {
-            let chunk = chunk.map_err(std::io::Error::other)?;
+            let chunk = match chunk {
+                Ok(v) => v,
+                Err(e) => {
+                    persist_assistant_message(
+                        &data_dir,
+                        &user_id,
+                        &conversation_id,
+                        &assistant_content,
+                        &mut persisted,
+                    );
+                    Err(std::io::Error::other(e))?;
+                    unreachable!();
+                }
+            };
             buf.extend_from_slice(&chunk);
 
             while let Some((event, consumed)) = next_sse_event(&buf) {
@@ -87,23 +101,13 @@ fn rewrite_sse_stream(
                     continue;
                 }
                 if data.trim() == "[DONE]" {
-                    // Stats: only count Saelora's message once the stream finishes successfully.
-                    let mgr = db::Manager::new(data_dir.clone());
-                    if let Ok(us) = mgr.users() {
-                        let _ = us.incr_message_counts(0, 1);
-                    }
-                    match mgr.user_data(&user_id) {
-                        Ok(uds) => {
-                            if let Err(e) =
-                                uds.append_saelora_message_in(&conversation_id, &assistant_content)
-                            {
-                                warn!(err=%e, user_id=%user_id, conversation_id=%conversation_id, "chat_stream: append saelora message failed");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(err=%e, user_id=%user_id, "chat_stream: user data open failed");
-                        }
-                    }
+                    persist_assistant_message(
+                        &data_dir,
+                        &user_id,
+                        &conversation_id,
+                        &assistant_content,
+                        &mut persisted,
+                    );
                     yield Bytes::from_static(b"data: [DONE]\n\n");
                     return;
                 }
@@ -118,6 +122,48 @@ fn rewrite_sse_stream(
                 out.extend_from_slice(b"\n\n");
                 yield Bytes::from(out);
             }
+        }
+        persist_assistant_message(
+            &data_dir,
+            &user_id,
+            &conversation_id,
+            &assistant_content,
+            &mut persisted,
+        );
+        yield Bytes::from_static(b"data: [DONE]\n\n");
+    }
+}
+
+fn persist_assistant_message(
+    data_dir: &Path,
+    user_id: &str,
+    conversation_id: &str,
+    assistant_content: &str,
+    persisted: &mut bool,
+) {
+    if *persisted {
+        return;
+    }
+    *persisted = true;
+
+    if assistant_content.trim().is_empty() {
+        return;
+    }
+
+    let mgr = db::Manager::new(data_dir.to_path_buf());
+    match mgr.user_data(user_id) {
+        Ok(uds) => match uds.append_saelora_message_in(conversation_id, assistant_content) {
+            Ok(_) => {
+                if let Ok(us) = mgr.users() {
+                    let _ = us.incr_message_counts(0, 1);
+                }
+            }
+            Err(e) => {
+                warn!(err=%e, user_id=%user_id, conversation_id=%conversation_id, "chat_stream: append saelora message failed");
+            }
+        },
+        Err(e) => {
+            warn!(err=%e, user_id=%user_id, "chat_stream: user data open failed");
         }
     }
 }

@@ -130,8 +130,7 @@ struct App {
     agent_focus: usize,
     task_chat: String,
     task_summary: String,
-    task_memory_curator: String,
-    task_memory_embed: String,
+    task_memory: String,
     agent_modal: bool,
     agent_modal_idx: Option<usize>,
     agent_models: Vec<String>,
@@ -162,11 +161,8 @@ pub async fn run_tui(data_dir: PathBuf) -> anyhow::Result<()> {
             .map(|a| a.name.clone())
             .unwrap_or_default();
     }
-    if settings.tasks.memory_curator_agent.is_empty() {
-        settings.tasks.memory_curator_agent = settings.tasks.summary_agent.clone();
-    }
-    if settings.tasks.memory_embed_agent.is_empty() {
-        settings.tasks.memory_embed_agent = settings.tasks.memory_curator_agent.clone();
+    if settings.tasks.memory_agent.is_empty() {
+        settings.tasks.memory_agent = settings.tasks.summary_agent.clone();
     }
     if settings.chat.system_prompt.trim().is_empty() {
         settings.chat.system_prompt = config::DEFAULT_SYSTEM_PROMPT.trim().to_string();
@@ -190,16 +186,9 @@ pub async fn run_tui(data_dir: PathBuf) -> anyhow::Result<()> {
         if !settings
             .agents
             .iter()
-            .any(|a| a.name == settings.tasks.memory_curator_agent)
+            .any(|a| a.name == settings.tasks.memory_agent)
         {
-            settings.tasks.memory_curator_agent = first.name.clone();
-        }
-        if !settings
-            .agents
-            .iter()
-            .any(|a| a.name == settings.tasks.memory_embed_agent)
-        {
-            settings.tasks.memory_embed_agent = first.name.clone();
+            settings.tasks.memory_agent = first.name.clone();
         }
     }
 
@@ -231,8 +220,7 @@ pub async fn run_tui(data_dir: PathBuf) -> anyhow::Result<()> {
         agent_focus: 0,
         task_chat: settings.tasks.chat_agent.clone(),
         task_summary: settings.tasks.summary_agent.clone(),
-        task_memory_curator: settings.tasks.memory_curator_agent.clone(),
-        task_memory_embed: settings.tasks.memory_embed_agent.clone(),
+        task_memory: settings.tasks.memory_agent.clone(),
         agent_modal: false,
         agent_modal_idx: None,
         agent_models: vec![],

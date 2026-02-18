@@ -96,11 +96,8 @@ fn open_openrouter_config(app: &mut App) {
                 .map(|a| a.name.clone())
                 .unwrap_or_default();
         }
-        if app.task_memory_curator.trim().is_empty() {
-            app.task_memory_curator = app.task_summary.clone();
-        }
-        if app.task_memory_embed.trim().is_empty() {
-            app.task_memory_embed = app.task_memory_curator.clone();
+        if app.task_memory.trim().is_empty() {
+            app.task_memory = app.task_summary.clone();
         }
     }
 

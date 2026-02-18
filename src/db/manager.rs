@@ -85,6 +85,7 @@ impl Manager {
         Ok(self.waitlist_list()?.len())
     }
 
+    #[cfg(test)]
     pub fn waitlist_has(&self, email: &str) -> Result<bool, DbError> {
         lists::has(&self.waitlist_path(), email)
     }

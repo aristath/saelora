@@ -21,6 +21,20 @@ pub(super) async fn auth_logout(State(st): State<AppState>, headers: HeaderMap) 
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
+pub(super) async fn auth_logout_all(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let u = match authed_user(&st, &headers) {
+        Ok(u) => u,
+        Err(code) => return errors::auth_error(code, "unauthorized"),
+    };
+    let mgr = db::Manager::new(st.data_dir.clone());
+    let us = match mgr.users() {
+        Ok(us) => us,
+        Err(_) => return errors::auth_error(StatusCode::INTERNAL_SERVER_ERROR, "server error"),
+    };
+    let _ = us.revoke_all_sessions_for_user(&u.id);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
 pub(super) async fn auth_me(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let u = match authed_user(&st, &headers) {
         Ok(u) => u,

@@ -13,6 +13,8 @@ use crate::db;
 
 use super::AppState;
 
+pub(super) const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
+
 pub(super) async fn invite(st: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     invite::invite(st, headers, body).await
 }
@@ -35,6 +37,10 @@ pub(super) async fn auth_login(st: State<AppState>, body: Bytes) -> Response {
 
 pub(super) async fn auth_logout(st: State<AppState>, headers: HeaderMap) -> Response {
     session::auth_logout(st, headers).await
+}
+
+pub(super) async fn auth_logout_all(st: State<AppState>, headers: HeaderMap) -> Response {
+    session::auth_logout_all(st, headers).await
 }
 
 pub(super) async fn auth_me(st: State<AppState>, headers: HeaderMap) -> Response {

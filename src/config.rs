@@ -66,6 +66,8 @@ pub struct Agent {
     #[serde(default)]
     pub provider: Provider,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub base_url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -83,12 +85,17 @@ pub struct TaskBindings {
     #[serde(default)]
     pub summary_agent: String,
     #[serde(default)]
-    pub memory_curator_agent: String,
-    #[serde(default)]
-    pub memory_embed_agent: String,
+    pub memory_agent: String,
 }
 
 impl Agent {
+    pub fn normalized_temperature(&self) -> Option<f64> {
+        match self.temperature {
+            Some(t) if t.is_finite() && (0.0..=2.0).contains(&t) => Some(t),
+            _ => None,
+        }
+    }
+
     pub fn openai_base_url(&self) -> String {
         let mut b = self.base_url.trim().to_string();
         if b.is_empty() {
@@ -130,6 +137,7 @@ pub fn default_settings() -> Settings {
         name: "default".to_string(),
         provider: Provider::OpenRouter,
         model: "openai/gpt-4o-mini".to_string(),
+        temperature: None,
         base_url: "https://openrouter.ai/api/v1".to_string(),
         api_key: String::new(),
         http_referer: String::new(),
@@ -145,8 +153,7 @@ pub fn default_settings() -> Settings {
         tasks: TaskBindings {
             chat_agent: default_agent.name.clone(),
             summary_agent: default_agent.name.clone(),
-            memory_curator_agent: default_agent.name.clone(),
-            memory_embed_agent: default_agent.name.clone(),
+            memory_agent: default_agent.name.clone(),
         },
     }
 }
@@ -166,22 +173,7 @@ impl Settings {
     pub fn resolve_agent(&self, task: &str) -> Option<Agent> {
         let target = match task {
             "summary" => &self.tasks.summary_agent,
-            "memory_curator" => {
-                if self.tasks.memory_curator_agent.trim().is_empty() {
-                    &self.tasks.summary_agent
-                } else {
-                    &self.tasks.memory_curator_agent
-                }
-            }
-            "memory_embed" => {
-                if !self.tasks.memory_embed_agent.trim().is_empty() {
-                    &self.tasks.memory_embed_agent
-                } else if !self.tasks.memory_curator_agent.trim().is_empty() {
-                    &self.tasks.memory_curator_agent
-                } else {
-                    &self.tasks.summary_agent
-                }
-            }
+            "memory" => &self.tasks.memory_agent,
             _ => &self.tasks.chat_agent,
         };
         if let Some(a) = self.agents.iter().find(|a| a.name == *target) {
@@ -247,6 +239,7 @@ mod tests {
             name: "o".to_string(),
             provider: Provider::OpenRouter,
             model: "x".to_string(),
+            temperature: None,
             base_url: "openrouter.ai/api/v1/".to_string(),
             api_key: String::new(),
             http_referer: String::new(),
@@ -258,6 +251,7 @@ mod tests {
             name: "ol".to_string(),
             provider: Provider::Ollama,
             model: "x".to_string(),
+            temperature: None,
             base_url: "192.168.1.9:11434".to_string(),
             api_key: String::new(),
             http_referer: String::new(),
@@ -295,14 +289,24 @@ mod tests {
     #[test]
     fn resolve_agent_supports_memory_task_fallbacks() {
         let mut s = default_settings();
-        s.tasks.memory_curator_agent.clear();
-        s.tasks.memory_embed_agent.clear();
+        s.tasks.memory_agent.clear();
 
         let summary = s.resolve_agent("summary").unwrap();
-        let curator = s.resolve_agent("memory_curator").unwrap();
-        let embed = s.resolve_agent("memory_embed").unwrap();
+        let memory = s.resolve_agent("memory").unwrap();
 
-        assert_eq!(curator.name, summary.name);
-        assert_eq!(embed.name, summary.name);
+        assert_eq!(memory.name, summary.name);
+    }
+
+    #[test]
+    fn normalized_temperature_keeps_only_valid_range() {
+        let mut a = default_settings().agents[0].clone();
+        a.temperature = Some(0.7);
+        assert_eq!(a.normalized_temperature(), Some(0.7));
+
+        a.temperature = Some(3.0);
+        assert_eq!(a.normalized_temperature(), None);
+
+        a.temperature = Some(f64::NAN);
+        assert_eq!(a.normalized_temperature(), None);
     }
 }

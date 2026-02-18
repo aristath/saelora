@@ -62,11 +62,11 @@ Ctrl+C quits; Esc backs out of a screen; Ctrl+S saves in config screens.
 ## Agents & models
 
 - Configure multiple agents (OpenRouter or Ollama) in the TUI “Agents” screen.
+- Each agent can define its own `temperature` (used by both chat and memory tasks bound to that agent).
 - Assign different agents per task:
   - `chat`
   - `summary`
-  - `memory curator`
-  - `memory embed`
+  - `memory`
 
 ## Long-term memory
 

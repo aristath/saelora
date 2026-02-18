@@ -9,6 +9,7 @@ use crate::{config, db, email};
 
 use super::super::errors;
 use super::super::AppState;
+use super::SESSION_TTL_SECS;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SetupRequest {
@@ -104,7 +105,7 @@ pub(super) async fn auth_setup(State(st): State<AppState>, body: Bytes) -> Respo
     }
 
     // Auto-login after password set.
-    let tok = match us.create_session_token(&uid, 30 * 24 * 3600) {
+    let tok = match us.create_session_token(&uid, SESSION_TTL_SECS) {
         Ok(t) => t,
         Err(_) => return errors::auth_error(StatusCode::INTERNAL_SERVER_ERROR, "server error"),
     };

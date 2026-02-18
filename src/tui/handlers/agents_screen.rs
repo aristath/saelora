@@ -109,17 +109,21 @@ fn handle_agent_modal_key(
         KeyCode::BackTab | KeyCode::Up => {
             app.agent_focus = (app.agent_focus + 10) % 11;
         }
+        KeyCode::Left if app.agent_focus == 7 => {
+            nudge_temperature(&mut app.agents[idx], -0.05);
+        }
+        KeyCode::Right if app.agent_focus == 7 => {
+            nudge_temperature(&mut app.agents[idx], 0.05);
+        }
         KeyCode::Enter | KeyCode::Char(' ') => {
             if app.agent_focus == 1 {
                 toggle_agent_provider(&mut app.agents[idx]);
-            } else if app.agent_focus == 7 {
-                app.task_chat = app.agents[idx].name.clone();
             } else if app.agent_focus == 8 {
-                app.task_summary = app.agents[idx].name.clone();
+                app.task_chat = app.agents[idx].name.clone();
             } else if app.agent_focus == 9 {
-                app.task_memory_curator = app.agents[idx].name.clone();
+                app.task_summary = app.agents[idx].name.clone();
             } else if app.agent_focus == 10 {
-                app.task_memory_embed = app.agents[idx].name.clone();
+                app.task_memory = app.agents[idx].name.clone();
             } else if app.agent_focus == 2 && !app.loading_agent_models {
                 match app.agents[idx].provider {
                     config::Provider::OpenRouter => {
@@ -176,12 +180,14 @@ fn handle_agent_modal_key(
             app.task_summary = app.agents[idx].name.clone();
         }
         KeyCode::Char('m') | KeyCode::Char('M') => {
-            app.task_memory_curator = app.agents[idx].name.clone();
-        }
-        KeyCode::Char('e') | KeyCode::Char('E') => {
-            app.task_memory_embed = app.agents[idx].name.clone();
+            app.task_memory = app.agents[idx].name.clone();
         }
         _ => {
+            if app.agent_focus == 7 {
+                if edit_temperature_from_key(app, idx, k) {
+                    return Ok(());
+                }
+            }
             // Text edits.
             let target_opt = match app.agent_focus {
                 0 => Some(&mut app.agents[idx].name),
@@ -221,11 +227,8 @@ fn handle_agent_modal_key(
                     if app.task_summary == old {
                         app.task_summary = new_name.clone();
                     }
-                    if app.task_memory_curator == old {
-                        app.task_memory_curator = new_name.clone();
-                    }
-                    if app.task_memory_embed == old {
-                        app.task_memory_embed = new_name;
+                    if app.task_memory == old {
+                        app.task_memory = new_name;
                     }
                 }
             }
@@ -285,8 +288,77 @@ fn validate_agents(app: &mut App) -> bool {
             app.err = format!("{}: API key required for OpenRouter", a.name);
             return false;
         }
+        if a.temperature.is_some() && a.normalized_temperature().is_none() {
+            app.err = format!("{}: temperature must be between 0.0 and 2.0", a.name);
+            return false;
+        }
     }
     true
+}
+
+fn nudge_temperature(a: &mut config::Agent, delta: f64) {
+    let base = a.normalized_temperature().unwrap_or(0.0);
+    let next = (base + delta).clamp(0.0, 2.0);
+    let rounded = (next * 100.0).round() / 100.0;
+    a.temperature = Some(rounded);
+}
+
+fn format_temperature(v: Option<f64>) -> String {
+    let Some(t) = v else {
+        return String::new();
+    };
+    let mut s = format!("{:.3}", t);
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
+}
+
+fn edit_temperature_from_key(app: &mut App, idx: usize, k: KeyEvent) -> bool {
+    let mut cur = format_temperature(app.agents[idx].temperature);
+    match k.code {
+        KeyCode::Backspace => {
+            cur.pop();
+        }
+        KeyCode::Char('.') => {
+            if cur.contains('.') {
+                return true;
+            }
+            if cur.is_empty() {
+                cur.push('0');
+            }
+            cur.push('.');
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            cur.push(c);
+        }
+        _ => return false,
+    }
+
+    let next = cur.trim();
+    if next.is_empty() {
+        app.agents[idx].temperature = None;
+        return true;
+    }
+    match next.parse::<f64>() {
+        Ok(v) if v.is_finite() && (0.0..=2.0).contains(&v) => {
+            app.agents[idx].temperature = Some(v);
+            if app.err.contains("temperature") {
+                app.err.clear();
+            }
+            true
+        }
+        _ => {
+            app.err = format!(
+                "{}: temperature must be between 0.0 and 2.0",
+                app.agents[idx].name
+            );
+            true
+        }
+    }
 }
 
 fn start_agent_model_load(app: &mut App, idx: usize, bg_tx: mpsc::UnboundedSender<BgMsg>) {
@@ -427,8 +499,7 @@ mod tests {
             agent_focus: 0,
             task_chat: String::new(),
             task_summary: String::new(),
-            task_memory_curator: String::new(),
-            task_memory_embed: String::new(),
+            task_memory: String::new(),
             agent_modal: false,
             agent_modal_idx: None,
             agent_models: vec![],
@@ -447,6 +518,7 @@ mod tests {
             name: "".to_string(),
             provider: config::Provider::OpenRouter,
             model: "m".to_string(),
+            temperature: None,
             base_url: String::new(),
             api_key: "k".to_string(),
             http_referer: String::new(),
@@ -467,6 +539,7 @@ mod tests {
                 name: "dup".to_string(),
                 provider: config::Provider::OpenRouter,
                 model: "m".to_string(),
+                temperature: None,
                 base_url: String::new(),
                 api_key: "k".to_string(),
                 http_referer: String::new(),
@@ -476,6 +549,7 @@ mod tests {
                 name: "dup".to_string(),
                 provider: config::Provider::Ollama,
                 model: "m2".to_string(),
+                temperature: None,
                 base_url: String::new(),
                 api_key: String::new(),
                 http_referer: String::new(),
@@ -490,6 +564,7 @@ mod tests {
             name: "or".to_string(),
             provider: config::Provider::OpenRouter,
             model: "m".to_string(),
+            temperature: None,
             base_url: String::new(),
             api_key: "".to_string(),
             http_referer: String::new(),
@@ -502,6 +577,7 @@ mod tests {
             name: "ol".to_string(),
             provider: config::Provider::Ollama,
             model: "m".to_string(),
+            temperature: None,
             base_url: "http://127.0.0.1:11434".to_string(),
             api_key: "".to_string(),
             http_referer: String::new(),

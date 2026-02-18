@@ -46,14 +46,16 @@ pub fn normalize_settings(cfg: &mut config::Settings) {
             .map(|a| a.name.clone())
             .unwrap_or_default();
     }
-    if cfg.tasks.memory_curator_agent.trim().is_empty() {
-        cfg.tasks.memory_curator_agent = cfg.tasks.summary_agent.clone();
-    }
-    if cfg.tasks.memory_embed_agent.trim().is_empty() {
-        cfg.tasks.memory_embed_agent = cfg.tasks.memory_curator_agent.clone();
+    if cfg.tasks.memory_agent.trim().is_empty() {
+        cfg.tasks.memory_agent = cfg.tasks.summary_agent.clone();
     }
     if cfg.chat.system_prompt.trim().is_empty() {
         cfg.chat.system_prompt = config::DEFAULT_SYSTEM_PROMPT.trim().to_string();
+    }
+    for agent in &mut cfg.agents {
+        if agent.normalized_temperature().is_none() {
+            agent.temperature = None;
+        }
     }
 
     if let Some(first) = cfg.agents.first() {
@@ -61,8 +63,7 @@ pub fn normalize_settings(cfg: &mut config::Settings) {
         for task in [
             &mut cfg.tasks.chat_agent,
             &mut cfg.tasks.summary_agent,
-            &mut cfg.tasks.memory_curator_agent,
-            &mut cfg.tasks.memory_embed_agent,
+            &mut cfg.tasks.memory_agent,
         ] {
             if !cfg.agents.iter().any(|a| a.name == *task) {
                 *task = first_name.clone();
@@ -128,11 +129,9 @@ mod tests {
     #[test]
     fn normalize_settings_populates_new_task_bindings() {
         let mut s = config::default_settings();
-        s.tasks.memory_curator_agent.clear();
-        s.tasks.memory_embed_agent.clear();
+        s.tasks.memory_agent.clear();
         normalize_settings(&mut s);
-        assert!(!s.tasks.memory_curator_agent.is_empty());
-        assert!(!s.tasks.memory_embed_agent.is_empty());
-        assert_eq!(s.tasks.memory_curator_agent, s.tasks.summary_agent);
+        assert!(!s.tasks.memory_agent.is_empty());
+        assert_eq!(s.tasks.memory_agent, s.tasks.summary_agent);
     }
 }

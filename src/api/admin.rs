@@ -281,6 +281,7 @@ pub(super) async fn set_user_status(
     };
     match us.set_user_status(id, status) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(db::DbError::NotFound) => errors::auth_error(StatusCode::NOT_FOUND, "user not found"),
         Err(db::DbError::InvalidStatus) => {
             errors::auth_error(StatusCode::BAD_REQUEST, "invalid status")
         }

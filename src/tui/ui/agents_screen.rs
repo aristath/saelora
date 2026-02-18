@@ -27,13 +27,13 @@ pub(super) fn draw_agents(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Style::default().fg(THEME.text).add_modifier(Modifier::BOLD),
     )]));
     let help = Paragraph::new(Line::from(vec![Span::styled(
-        "Up/Down: select | Tab: next field | P: toggle provider | C/Y/M/E: bind task | Ctrl+S save | Esc back",
+        "Up/Down: select | Tab: next field | P: toggle provider | C/Y/M: bind task | Ctrl+S save | Esc back",
         Style::default().fg(THEME.sub),
     )]));
     let tasks = Paragraph::new(Line::from(vec![Span::styled(
         format!(
-            "Chat: {}   Summary: {}   Curator: {}   Embed: {}",
-            app.task_chat, app.task_summary, app.task_memory_curator, app.task_memory_embed
+            "Chat: {}   Summary: {}   Memory: {}",
+            app.task_chat, app.task_summary, app.task_memory
         ),
         Style::default().fg(THEME.sub),
     )]));
@@ -107,7 +107,7 @@ fn draw_agent_modal(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
     let agent = &app.agents[idx];
     let w = (area.width as f32 * 0.92) as u16;
-    let h = 13u16;
+    let h = 14u16;
     let x = area.x + (area.width - w) / 2;
     let y = area.y + (area.height - h) / 2;
     let modal_area = Rect::new(x, y, w, h);
@@ -139,14 +139,18 @@ fn draw_agent_modal(f: &mut ratatui::Frame, area: Rect, app: &App) {
         render_field("API key:", &mask_key(&agent.api_key), app.agent_focus == 4),
         render_field("HTTP Referer:", &agent.http_referer, app.agent_focus == 5),
         render_field("X-Title:", &agent.x_title, app.agent_focus == 6),
-        render_field("Bind chat (C):", "", app.agent_focus == 7),
-        render_field("Bind summary (Y):", "", app.agent_focus == 8),
-        render_field("Bind memory curator (M):", "", app.agent_focus == 9),
-        render_field("Bind memory embed (E):", "", app.agent_focus == 10),
+        render_field(
+            "Temperature:",
+            &format_temperature(agent.temperature),
+            app.agent_focus == 7,
+        ),
+        render_field("Bind chat (C):", "", app.agent_focus == 8),
+        render_field("Bind summary (Y):", "", app.agent_focus == 9),
+        render_field("Bind memory (M):", "", app.agent_focus == 10),
     ];
 
     let hint = Line::from(Span::styled(
-        "Up/Down: focus | Type: edit | Enter: toggle/list/select | C/Y/M/E bind selected task | Ctrl+S save | Esc close",
+        "Up/Down: focus | Type: edit | Left/Right: temp +/- | Enter: toggle/list/select | C/Y/M bind selected task | Ctrl+S save | Esc close",
         Style::default().fg(THEME.sub),
     ));
     let mut content: Vec<Line<'static>> = rows;
@@ -179,4 +183,18 @@ fn draw_agent_modal(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let para = Paragraph::new(Text::from(content)).style(Style::default().fg(THEME.text));
     f.render_widget(para, inner);
+}
+
+fn format_temperature(v: Option<f64>) -> String {
+    let Some(t) = v else {
+        return String::new();
+    };
+    let mut s = format!("{:.3}", t);
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
 }

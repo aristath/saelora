@@ -96,6 +96,12 @@ function formatErr(data, fallback = 'request failed') {
   return data?.error?.message || fallback
 }
 
+function httpErr(res, data, fallback) {
+  const err = new Error(formatErr(data, fallback))
+  err.status = res?.status || 0
+  return err
+}
+
 function setConfigNote(msg, ok = false) {
   configNote.textContent = msg || ''
   configNote.classList.toggle('ok', !!ok)
@@ -120,7 +126,7 @@ async function login(email, password) {
 
 async function loadOverview() {
   const { res, data } = await apiJson('/v1/admin/overview')
-  if (!res.ok) throw new Error(formatErr(data, `overview failed (${res.status})`))
+  if (!res.ok) throw httpErr(res, data, `overview failed (${res.status})`)
 
   adminWho.textContent = data.admin_email || ''
   const items = [
@@ -142,7 +148,7 @@ async function loadOverview() {
 
 async function loadConfig() {
   const { res, data } = await apiJson('/v1/admin/config')
-  if (!res.ok) throw new Error(formatErr(data, `config failed (${res.status})`))
+  if (!res.ok) throw httpErr(res, data, `config failed (${res.status})`)
 
   currentSettings = data.settings || {}
   configJson.value = JSON.stringify(currentSettings, null, 2)
@@ -209,7 +215,7 @@ function renderInviteList(listEl, records, actions) {
 
 async function loadInvites() {
   const { res, data } = await apiJson('/v1/admin/invites')
-  if (!res.ok) throw new Error(formatErr(data, `invites failed (${res.status})`))
+  if (!res.ok) throw httpErr(res, data, `invites failed (${res.status})`)
 
   renderInviteList(pendingInvitesEl, data.pending || [], [
     { label: 'approve', fn: approveInvite },
@@ -259,7 +265,7 @@ async function removeWhitelistInvite(email) {
 
 async function loadUsers() {
   const { res, data } = await apiJson('/v1/admin/users')
-  if (!res.ok) throw new Error(formatErr(data, `users failed (${res.status})`))
+  if (!res.ok) throw httpErr(res, data, `users failed (${res.status})`)
 
   const users = data.users || []
   if (users.length === 0) {
@@ -289,6 +295,7 @@ async function loadUsers() {
 
     const tdStatus = document.createElement('td')
     const sel = document.createElement('select')
+    sel.setAttribute('aria-label', `Status for ${u.email}`)
     for (const st of ['active', 'pending', 'disabled']) {
       const opt = document.createElement('option')
       opt.value = st
@@ -328,7 +335,21 @@ async function loadUsers() {
 }
 
 async function loadAdmin() {
-  await Promise.all([loadOverview(), loadConfig(), loadInvites(), loadUsers()])
+  const results = await Promise.allSettled([loadOverview(), loadConfig(), loadInvites(), loadUsers()])
+  let authFailure = null
+  let otherFailure = null
+  for (const r of results) {
+    if (r.status !== 'rejected') continue
+    const reason = r.reason
+    const code = Number(reason?.status || 0)
+    if (code === 401 || code === 403) {
+      authFailure = authFailure || reason
+    } else {
+      otherFailure = otherFailure || reason
+    }
+  }
+  if (authFailure) throw authFailure
+  if (otherFailure) throw otherFailure
 }
 
 async function enterAdmin() {
@@ -337,9 +358,14 @@ async function enterAdmin() {
     setView('admin')
     loginErr.textContent = ''
   } catch (e) {
-    setToken('')
+    const code = Number(e?.status || 0)
+    if (code === 401 || code === 403) {
+      setToken('')
+      loginErr.textContent = 'unauthorized'
+    } else {
+      loginErr.textContent = e.message || 'admin load failed'
+    }
     setView('login')
-    loginErr.textContent = e.message || 'unauthorized'
   }
 }
 

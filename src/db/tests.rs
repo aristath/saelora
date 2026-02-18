@@ -193,6 +193,7 @@ fn earliest_active_user_is_admin() {
 
     us.set_user_status(&admin_id, "disabled").unwrap();
     assert!(!us.is_admin_user(&admin_id).unwrap());
+    assert!(us.is_admin_user(&other_id).unwrap());
 }
 
 #[test]
@@ -298,16 +299,23 @@ fn memory_tables_store_embeddings_scores_and_links() {
 
     uds.upsert_message_embedding(m1, "embed-model", &[0.1, 0.2, 0.3])
         .unwrap();
+    uds.upsert_message_embedding(m2, "embed-model", &[0.12, 0.18, 0.29])
+        .unwrap();
     let emb = uds
         .message_embedding(m1)
         .unwrap()
         .expect("embedding present");
-    assert_eq!(emb.message_id, m1);
     assert_eq!(emb.embedding.len(), 3);
+    let nearest_msgs = uds
+        .nearest_messages_by_embedding("embed-model", &[0.1, 0.2, 0.31], m1, Some(1), None, 4, 0.0)
+        .unwrap();
+    assert!(!nearest_msgs.is_empty());
+    assert_eq!(nearest_msgs[0].id, m2);
 
     let sid = uds
         .apply_memory_patch(MemoryPatch {
             statement_id: 0,
+            model: "embed-model",
             text: "User hurt their foot",
             delta: 0.7,
             salience: 0.8,
@@ -319,6 +327,7 @@ fn memory_tables_store_embeddings_scores_and_links() {
         .unwrap();
     uds.apply_memory_patch(MemoryPatch {
         statement_id: sid,
+        model: "embed-model",
         text: "User hurt their foot",
         delta: 0.4,
         salience: 0.9,
@@ -332,6 +341,7 @@ fn memory_tables_store_embeddings_scores_and_links() {
     let sid2 = uds
         .apply_memory_patch(MemoryPatch {
             statement_id: 0,
+            model: "embed-model",
             text: "User drinks beer occasionally",
             delta: 0.2,
             salience: 0.4,
@@ -346,16 +356,211 @@ fn memory_tables_store_embeddings_scores_and_links() {
     // Same link reversed should update the same row instead of duplicating.
     uds.upsert_memory_link(sid2, sid, "related", 0.7).unwrap();
 
-    let rows = uds.list_memory_statements_with_embeddings(10).unwrap();
+    let rows = uds
+        .list_memory_statements(10, Some("embed-model"), Some(1))
+        .unwrap();
     let foot = rows
         .iter()
-        .find(|(s, _)| s.id == sid)
-        .map(|(s, _)| s.clone())
+        .find(|s| s.id == sid)
+        .cloned()
         .expect("foot statement exists");
     assert_eq!(foot.evidence_count, 2);
     assert_eq!(foot.last_seen_message_id, m2);
     assert!(foot.belief_score > 1.0);
     assert!((foot.salience - 0.9).abs() < 0.0001);
 
+    let nearest_statements = uds
+        .nearest_memory_statements("embed-model", &[0.5, 0.1, 0.2], 3, Some(1))
+        .unwrap();
+    assert!(!nearest_statements.is_empty());
+    assert_eq!(nearest_statements[0].0.id, sid);
+
     assert_eq!(uds.count_memory_links().unwrap(), 1);
+}
+
+#[test]
+fn semantic_threads_support_multi_membership_and_edges() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("semantic_threads").unwrap();
+
+    let m1 = uds.append_user_message("I slept badly last night").unwrap();
+    let _m2 = uds.append_user_message("sleep is still difficult").unwrap();
+
+    let t1 = uds
+        .create_semantic_thread("embed-model", &[1.0, 0.0, 0.0])
+        .unwrap();
+    let t2 = uds
+        .create_semantic_thread("embed-model", &[0.8, 0.2, 0.0])
+        .unwrap();
+    assert!(t1 > 0);
+    assert!(t2 > t1);
+
+    let nearest = uds
+        .nearest_semantic_threads("embed-model", &[0.95, 0.05, 0.0], 5, 0.0)
+        .unwrap();
+    assert!(!nearest.is_empty());
+    assert_eq!(nearest[0].0, t1);
+
+    let first_insert = uds
+        .upsert_semantic_thread_membership(t1, m1, 0.91, true)
+        .unwrap();
+    assert!(first_insert);
+    uds.increment_semantic_thread_centroid(t1, &[1.0, 0.0, 0.0])
+        .unwrap();
+
+    let second_insert = uds
+        .upsert_semantic_thread_membership(t2, m1, 0.67, false)
+        .unwrap();
+    assert!(second_insert);
+    uds.increment_semantic_thread_centroid(t2, &[1.0, 0.0, 0.0])
+        .unwrap();
+
+    // Upsert should update in-place without creating duplicate membership rows.
+    let duplicate = uds
+        .upsert_semantic_thread_membership(t1, m1, 0.95, true)
+        .unwrap();
+    assert!(!duplicate);
+
+    let memberships = uds.semantic_thread_memberships_for_message(m1, 10).unwrap();
+    assert_eq!(memberships.len(), 2);
+    assert!(memberships
+        .iter()
+        .any(|m| m.thread_id == t1 && m.is_primary && m.score >= 0.90));
+    assert!(memberships
+        .iter()
+        .any(|m| m.thread_id == t2 && !m.is_primary && m.score >= 0.60));
+
+    uds.upsert_semantic_thread_edge(t1, t2, "related", 0.66)
+        .unwrap();
+    // Reversed order should hit same edge row.
+    uds.upsert_semantic_thread_edge(t2, t1, "related", 0.71)
+        .unwrap();
+
+    assert_eq!(uds.count_semantic_threads().unwrap(), 2);
+    assert_eq!(uds.count_semantic_thread_memberships().unwrap(), 2);
+    assert_eq!(uds.count_semantic_thread_edges().unwrap(), 1);
+}
+
+#[test]
+fn message_memory_ingest_backfill_is_oldest_first() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("memory_ingest").unwrap();
+
+    let m1 = uds.append_user_message("first").unwrap();
+    let _m2 = uds.append_saelora_message("reply").unwrap();
+    let m3 = uds.append_user_message("third").unwrap();
+    let m4 = uds.append_user_message("fourth").unwrap();
+
+    let next1 = uds.next_backfill_message().unwrap().unwrap();
+    assert_eq!(next1.0, m1);
+
+    uds.queue_message_ingest(m1).unwrap();
+    assert!(uds.claim_message_ingest(m1).unwrap());
+    assert!(!uds.claim_message_ingest(m1).unwrap());
+    uds.complete_message_ingest(m1).unwrap();
+    uds.upsert_message_embedding(m1, "embed-model", &[0.1, 0.2, 0.3])
+        .unwrap();
+    let t1 = uds
+        .create_semantic_thread("embed-model", &[0.1, 0.2, 0.3])
+        .unwrap();
+    assert!(uds
+        .upsert_semantic_thread_membership(t1, m1, 1.0, true)
+        .unwrap());
+    uds.increment_semantic_thread_centroid(t1, &[0.1, 0.2, 0.3])
+        .unwrap();
+
+    let next2 = uds.next_backfill_message().unwrap().unwrap();
+    assert_eq!(next2.0, m3);
+
+    // Failed rows remain selected up to attempt 9.
+    for _ in 0..9 {
+        assert!(uds.claim_message_ingest(m3).unwrap());
+        uds.fail_message_ingest(m3, "transient").unwrap();
+        let next = uds.next_backfill_message().unwrap().unwrap();
+        assert_eq!(next.0, m3);
+    }
+
+    // 10th failure hits the cap, so backfill moves on.
+    assert!(uds.claim_message_ingest(m3).unwrap());
+    uds.fail_message_ingest(m3, "transient").unwrap();
+    let next = uds.next_backfill_message().unwrap().unwrap();
+    assert_eq!(next.0, m4);
+}
+
+#[test]
+fn done_rows_without_embedding_or_semantic_membership_are_reprocessed() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("memory_done_reprocess").unwrap();
+
+    let m1 = uds.append_user_message("first").unwrap();
+    uds.queue_message_ingest(m1).unwrap();
+    assert!(uds.claim_message_ingest(m1).unwrap());
+    uds.complete_message_ingest(m1).unwrap();
+
+    // A done row with neither embedding nor semantic membership should be picked again.
+    let next = uds.next_backfill_message().unwrap().unwrap();
+    assert_eq!(next.0, m1);
+    assert!(uds.claim_message_ingest(m1).unwrap());
+    uds.complete_message_ingest(m1).unwrap();
+
+    // Once embedding + semantic membership exist, row should no longer be picked.
+    uds.upsert_message_embedding(m1, "embed-model", &[0.1, 0.2, 0.3])
+        .unwrap();
+    let t1 = uds
+        .create_semantic_thread("embed-model", &[0.1, 0.2, 0.3])
+        .unwrap();
+    assert!(uds
+        .upsert_semantic_thread_membership(t1, m1, 1.0, true)
+        .unwrap());
+    uds.increment_semantic_thread_centroid(t1, &[0.1, 0.2, 0.3])
+        .unwrap();
+
+    assert!(uds.next_backfill_message().unwrap().is_none());
+}
+
+#[test]
+fn backfill_embedding_batch_candidates_skip_embedded_and_capped_failures() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("memory_batch").unwrap();
+
+    let m1 = uds.append_user_message("one").unwrap();
+    let m2 = uds.append_user_message("two").unwrap();
+    let m3 = uds.append_saelora_message("not user").unwrap();
+    let m4 = uds.append_user_message("four").unwrap();
+    assert!(m3 > 0);
+
+    // Already embedded rows should not be returned for backfill embedding batches.
+    uds.upsert_message_embedding(m2, "embed-model", &[0.2, 0.3, 0.4])
+        .unwrap();
+
+    // Exhaust retries for m4 so it is no longer eligible.
+    for _ in 0..10 {
+        assert!(uds.claim_message_ingest(m4).unwrap());
+        uds.fail_message_ingest(m4, "transient").unwrap();
+    }
+
+    let batch = uds
+        .list_backfill_messages_without_embedding_from(m1, 10)
+        .unwrap();
+    let ids = batch.into_iter().map(|m| m.id).collect::<Vec<_>>();
+    assert_eq!(ids, vec![m1]);
+}
+
+#[test]
+fn running_ingest_rows_are_recoverable_after_restart() {
+    let (_td, mgr) = new_mgr();
+    let uds = mgr.user_data("memory_recovery").unwrap();
+
+    let m1 = uds.append_user_message("recover me").unwrap();
+    uds.queue_message_ingest(m1).unwrap();
+    assert!(uds.claim_message_ingest(m1).unwrap());
+    assert!(!uds.claim_message_ingest(m1).unwrap());
+
+    // Simulate restart recovery.
+    let recovered = uds.recover_running_ingest_to_queued().unwrap();
+    assert_eq!(recovered, 1);
+
+    let next = uds.next_backfill_message().unwrap().unwrap();
+    assert_eq!(next.0, m1);
+    assert!(uds.claim_message_ingest(m1).unwrap());
 }

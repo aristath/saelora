@@ -1,8 +1,11 @@
 use rusqlite::params;
+#[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(test)]
+use super::super::looks_like_email;
 use super::super::util::now_ms;
-use super::super::{looks_like_email, DbError};
+use super::super::DbError;
 use super::{UserRecord, UsersStore};
 
 impl UsersStore {
@@ -52,6 +55,7 @@ impl UsersStore {
         }
     }
 
+    #[cfg(test)]
     pub fn create_user(
         &self,
         email: &str,
@@ -67,13 +71,27 @@ impl UsersStore {
         } else {
             status.trim()
         };
+        let make_admin = if st == "active" {
+            let active_admins: i64 = self.conn.query_row(
+                "SELECT COUNT(1) FROM users WHERE is_admin = 1 AND status = 'active'",
+                params![],
+                |r| r.get(0),
+            )?;
+            if active_admins == 0 {
+                1_i64
+            } else {
+                0_i64
+            }
+        } else {
+            0_i64
+        };
 
         let id = Uuid::new_v4().to_string();
         let now = now_ms();
 
         let res = self.conn.execute(
-            "INSERT INTO users(id,email,password_hash,status,created_at) VALUES (?,?,?,?,?)",
-            params![id.as_str(), e, password_hash, st, now],
+            "INSERT INTO users(id,email,password_hash,status,is_admin,created_at) VALUES (?,?,?,?,?,?)",
+            params![id.as_str(), e, password_hash, st, make_admin, now],
         );
         match res {
             Ok(_) => Ok(id),
@@ -84,18 +102,6 @@ impl UsersStore {
             }
             Err(e) => Err(DbError::Sql(e)),
         }
-    }
-
-    pub fn has_user(&self, email: &str) -> Result<bool, DbError> {
-        let e = email.trim();
-        if e.is_empty() {
-            return Ok(false);
-        }
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM users WHERE email = ?1 LIMIT 1")?;
-        let mut rows = stmt.query(params![e])?;
-        Ok(rows.next()?.is_some())
     }
 
     pub fn count_users(&self) -> Result<usize, DbError> {
@@ -137,10 +143,13 @@ impl UsersStore {
             return Err(DbError::InvalidStatus);
         }
         let now = now_ms();
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE users SET status = ?1, created_at = created_at WHERE id = ?2",
             params![st, uid],
         )?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
         // Revoke sessions for disabled users (best-effort).
         if st == "disabled" {
             let _ = self.conn.execute(
@@ -148,6 +157,7 @@ impl UsersStore {
                 params![now, uid],
             );
         }
+        self.ensure_active_admin_exists()?;
         Ok(())
     }
 
@@ -156,16 +166,41 @@ impl UsersStore {
         if uid.is_empty() {
             return Ok(false);
         }
+        self.ensure_active_admin_exists()?;
         let mut stmt = self
             .conn
-            .prepare("SELECT id, status FROM users ORDER BY rowid ASC LIMIT 1")?;
-        let row = stmt.query_row(params![], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            .prepare("SELECT status, is_admin FROM users WHERE id = ?1 LIMIT 1")?;
+        let row = stmt.query_row(params![uid], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         });
         match row {
-            Ok((admin_id, status)) => Ok(admin_id == uid && status == "active"),
+            Ok((status, is_admin)) => Ok(status == "active" && is_admin == 1),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
             Err(e) => Err(DbError::Sql(e)),
         }
+    }
+
+    fn ensure_active_admin_exists(&self) -> Result<(), DbError> {
+        let active_admins: i64 = self.conn.query_row(
+            "SELECT COUNT(1) FROM users WHERE is_admin = 1 AND status = 'active'",
+            params![],
+            |r| r.get(0),
+        )?;
+        if active_admins > 0 {
+            return Ok(());
+        }
+        self.conn.execute(
+            r#"UPDATE users
+               SET is_admin = 1
+               WHERE id = (
+                   SELECT id
+                   FROM users
+                   WHERE status = 'active'
+                   ORDER BY created_at ASC, rowid ASC
+                   LIMIT 1
+               )"#,
+            params![],
+        )?;
+        Ok(())
     }
 }

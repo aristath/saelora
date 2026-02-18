@@ -85,6 +85,19 @@ impl UsersStore {
         Ok(())
     }
 
+    pub fn revoke_all_sessions_for_user(&self, user_id: &str) -> Result<(), DbError> {
+        let uid = user_id.trim();
+        if uid.is_empty() {
+            return Err(DbError::Unauthorized);
+        }
+        let now = now_ms();
+        self.conn.execute(
+            "UPDATE sessions SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL",
+            params![now, uid],
+        )?;
+        Ok(())
+    }
+
     pub fn auth_user_from_token(&self, raw_token: &str) -> Result<UserRecord, DbError> {
         let tok = raw_token.trim();
         if tok.is_empty() {

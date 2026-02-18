@@ -19,6 +19,7 @@ pub struct Client {
     http_referer: String,
     x_title: String,
     http: reqwest::Client,
+    http_stream: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,8 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()?;
+        // Streaming responses can legitimately run much longer than non-stream requests.
+        let http_stream = reqwest::Client::builder().build()?;
 
         Ok(Self {
             base_url,
@@ -47,6 +50,7 @@ impl Client {
             http_referer: cfg.http_referer.trim().to_string(),
             x_title: cfg.x_title.trim().to_string(),
             http,
+            http_stream,
         })
     }
 
@@ -177,7 +181,7 @@ impl Client {
         let mut r = req.clone();
         r.stream = true;
         let resp = self
-            .auth_headers(self.http.post(url))
+            .auth_headers(self.http_stream.post(url))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&r)

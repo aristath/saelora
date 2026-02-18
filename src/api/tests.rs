@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,6 +23,7 @@ fn test_state(data_dir: &Path) -> AppState {
     AppState {
         data_dir: data_dir.to_path_buf(),
         last_key_info_log: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(3600))),
+        auth_rate_limits: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 
@@ -47,8 +49,11 @@ fn bearer_headers(tok: &str) -> HeaderMap {
 async fn register_whitelisted(st: AppState, email: &str, password: &str) -> (db::Manager, String) {
     let mgr = db::Manager::new(st.data_dir.clone());
     mgr.whitelist_add(email).unwrap();
-    let body = Bytes::from(serde_json::json!({"email": email, "password": password}).to_string());
-    let resp = auth::auth_register(State(st), body).await;
+    let us = mgr.users().unwrap();
+    let setup_token = us.create_magic_token(email, 3600).unwrap();
+    let body =
+        Bytes::from(serde_json::json!({"token": setup_token, "password": password}).to_string());
+    let resp = auth::auth_setup(State(st), body).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let v = resp_json(resp).await;
     let tok = v.get("token").and_then(|t| t.as_str()).unwrap().to_string();
@@ -179,36 +184,22 @@ async fn invite_rejects_invalid_email() {
 }
 
 #[tokio::test]
-async fn register_requires_whitelist_and_reports_pending_vs_not_found() {
+async fn register_endpoint_is_disabled_for_security() {
     let td = tempfile::tempdir().unwrap();
     let data_dir = td.path().to_path_buf();
     let st = test_state(&data_dir);
-    let mgr = db::Manager::new(data_dir.clone());
 
     let email = "r@example.com";
     let body =
         Bytes::from(serde_json::json!({"email": email, "password": "password123"}).to_string());
     let resp = auth::auth_register(State(st.clone()), body).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::GONE);
     let v = resp_json(resp).await;
     assert_eq!(
         v.get("error")
             .and_then(|e| e.get("message"))
             .and_then(|m| m.as_str()),
-        Some("invite required")
-    );
-
-    mgr.waitlist_add(email).unwrap();
-    let body2 =
-        Bytes::from(serde_json::json!({"email": email, "password": "password123"}).to_string());
-    let resp2 = auth::auth_register(State(st.clone()), body2).await;
-    assert_eq!(resp2.status(), StatusCode::FORBIDDEN);
-    let v2 = resp_json(resp2).await;
-    assert_eq!(
-        v2.get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str()),
-        Some("you are on the waitlist")
+        Some("direct registration is disabled; use \"Email me a login link\"")
     );
 }
 
@@ -237,59 +228,6 @@ async fn register_validates_email_and_password() {
     )
     .await;
     assert_eq!(resp3.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn register_creates_user_removes_lists_and_me_works() {
-    let td = tempfile::tempdir().unwrap();
-    let data_dir = td.path().to_path_buf();
-    let st = test_state(&data_dir);
-    let mgr = db::Manager::new(data_dir.clone());
-
-    let email = "Test@Example.com";
-    mgr.waitlist_add(email).unwrap();
-    mgr.whitelist_add(email).unwrap();
-
-    let body = Bytes::from(
-        serde_json::json!({"email": "test@example.com", "password": "password123"}).to_string(),
-    );
-    let resp = auth::auth_register(State(st.clone()), body).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let v = resp_json(resp).await;
-    let tok = v.get("token").and_then(|t| t.as_str()).unwrap().to_string();
-    assert!(!tok.trim().is_empty());
-
-    // Lists should be cleaned up.
-    assert!(!mgr.waitlist_has("test@example.com").unwrap());
-    assert!(!mgr.whitelist_has("test@example.com").unwrap());
-
-    // /me should work with the returned token.
-    let resp_me = auth::auth_me(State(st.clone()), bearer_headers(&tok)).await;
-    assert_eq!(resp_me.status(), StatusCode::OK);
-    let me = resp_json(resp_me).await;
-    assert_eq!(
-        me.get("email").and_then(|m| m.as_str()),
-        Some("test@example.com")
-    );
-    assert_eq!(me.get("status").and_then(|m| m.as_str()), Some("active"));
-}
-
-#[tokio::test]
-async fn register_conflicts_when_account_exists() {
-    let td = tempfile::tempdir().unwrap();
-    let data_dir = td.path().to_path_buf();
-    let st = test_state(&data_dir);
-    let email = "exists@example.com";
-
-    let (_mgr, _tok) = register_whitelisted(st.clone(), email, "password123").await;
-
-    // Second register should conflict even if re-whitelisted.
-    let mgr2 = db::Manager::new(data_dir.clone());
-    mgr2.whitelist_add(email).unwrap();
-    let body =
-        Bytes::from(serde_json::json!({"email": email, "password": "password123"}).to_string());
-    let resp2 = auth::auth_register(State(st.clone()), body).await;
-    assert_eq!(resp2.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -335,6 +273,46 @@ async fn login_and_logout_flow_is_consistent() {
     assert_eq!(resp_lo.status(), StatusCode::OK);
     assert_eq!(
         auth::auth_me(State(st.clone()), bearer_headers(&tok))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Create two sessions and revoke all.
+    let resp_a = auth::auth_login(
+        State(st.clone()),
+        Bytes::from(serde_json::json!({"email": email, "password":"password123"}).to_string()),
+    )
+    .await;
+    assert_eq!(resp_a.status(), StatusCode::OK);
+    let tok_a = resp_json(resp_a)
+        .await
+        .get("token")
+        .and_then(|t| t.as_str())
+        .unwrap()
+        .to_string();
+    let resp_b = auth::auth_login(
+        State(st.clone()),
+        Bytes::from(serde_json::json!({"email": email, "password":"password123"}).to_string()),
+    )
+    .await;
+    assert_eq!(resp_b.status(), StatusCode::OK);
+    let tok_b = resp_json(resp_b)
+        .await
+        .get("token")
+        .and_then(|t| t.as_str())
+        .unwrap()
+        .to_string();
+    let resp_all = auth::auth_logout_all(State(st.clone()), bearer_headers(&tok_a)).await;
+    assert_eq!(resp_all.status(), StatusCode::OK);
+    assert_eq!(
+        auth::auth_me(State(st.clone()), bearer_headers(&tok_a))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        auth::auth_me(State(st.clone()), bearer_headers(&tok_b))
             .await
             .status(),
         StatusCode::UNAUTHORIZED

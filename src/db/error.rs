@@ -4,6 +4,7 @@ pub enum DbError {
     InvalidEmail,
     #[error("invalid status")]
     InvalidStatus,
+    #[cfg(test)]
     #[error("user already exists")]
     UserExists,
     #[error("unauthorized")]

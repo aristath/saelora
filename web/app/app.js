@@ -830,30 +830,7 @@ passwordLinkBtn.addEventListener('click', () => {
 registerBtn.addEventListener('click', () => {
   void (async () => {
     clearErrors()
-    const email = (loginEmail.value || '').trim()
-    const password = loginPassword.value || ''
-    if (!email || !password) {
-      loginErr.textContent = 'missing email or password'
-      return
-    }
-    if (password.trim().length < 8) {
-      loginErr.textContent = 'password must be at least 8 characters'
-      return
-    }
-    const { res, j } = await apiJson('/v1/auth/register', {
-      method: 'POST',
-      body: { email, password },
-    })
-    if (!res.ok) {
-      loginErr.textContent = j?.error?.message || `register failed (${res.status})`
-      return
-    }
-    if (j?.token) {
-      setToken(j.token)
-      setView('chat')
-      await initChatSession()
-    } else {
-    }
+    await requestPasswordLink()
   })()
 })
 

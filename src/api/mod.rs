@@ -5,10 +5,12 @@ mod cors;
 mod errors;
 mod health;
 mod logging;
+mod rate_limit;
 
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,18 +34,22 @@ pub struct ServerConfig {
 struct AppState {
     data_dir: PathBuf,
     last_key_info_log: Arc<Mutex<Instant>>,
+    auth_rate_limits: Arc<Mutex<HashMap<String, rate_limit::Bucket>>>,
 }
 
 pub async fn run_server(
     cfg: ServerConfig,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
+    crate::memory::ensure_backfill_worker(cfg.data_dir.clone());
+
     let state = AppState {
         data_dir: cfg.data_dir.clone(),
         last_key_info_log: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(3600))),
+        auth_rate_limits: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    let app = Router::new()
+    let auth_routes = Router::new()
         .route("/healthz", get(health::healthz))
         .route("/invite", post(auth::invite))
         .route("/v1/auth/setup", post(auth::auth_setup))
@@ -54,7 +60,15 @@ pub async fn run_server(
         .route("/v1/auth/register", post(auth::auth_register))
         .route("/v1/auth/login", post(auth::auth_login))
         .route("/v1/auth/logout", post(auth::auth_logout))
+        .route("/v1/auth/logout-all", post(auth::auth_logout_all))
         .route("/v1/auth/me", get(auth::auth_me))
+        .route_layer(from_fn_with_state(
+            state.clone(),
+            rate_limit::auth_rate_limit,
+        ));
+
+    let app = Router::new()
+        .merge(auth_routes)
         .route("/v1/admin/overview", get(admin::overview))
         .route(
             "/v1/admin/config",

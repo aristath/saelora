@@ -28,12 +28,13 @@ pub(super) fn open_sqlite(path: &Path) -> Result<Connection, DbError> {
 pub(super) fn init_schema(conn: &mut Connection) -> Result<(), DbError> {
     let stmts = [
         r#"CREATE TABLE IF NOT EXISTS users (
-				id TEXT PRIMARY KEY,
-				email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-				password_hash TEXT NOT NULL,
-				status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled','pending')),
-				created_at INTEGER NOT NULL
-			);"#,
+					id TEXT PRIMARY KEY,
+					email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+					password_hash TEXT NOT NULL,
+					status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled','pending')),
+                    is_admin INTEGER NOT NULL DEFAULT 0,
+					created_at INTEGER NOT NULL
+				);"#,
         r#"CREATE TABLE IF NOT EXISTS sessions (
 				id TEXT PRIMARY KEY,
 				user_id TEXT NOT NULL,
@@ -71,6 +72,47 @@ pub(super) fn init_schema(conn: &mut Connection) -> Result<(), DbError> {
     ];
     for s in stmts {
         conn.execute_batch(s)?;
+    }
+    ensure_admin_column_and_seed(conn)?;
+    Ok(())
+}
+
+fn ensure_admin_column_and_seed(conn: &Connection) -> Result<(), DbError> {
+    let mut has_is_admin = false;
+    let mut stmt = conn.prepare("PRAGMA table_info(users)")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for row in rows {
+        if row?.trim() == "is_admin" {
+            has_is_admin = true;
+            break;
+        }
+    }
+    if !has_is_admin {
+        conn.execute_batch("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    conn.execute_batch(
+        r#"CREATE INDEX IF NOT EXISTS users_admin_status_idx
+           ON users(is_admin, status, created_at);"#,
+    )?;
+
+    let admin_count: i64 = conn.query_row(
+        "SELECT COUNT(1) FROM users WHERE is_admin = 1 AND status = 'active'",
+        [],
+        |r| r.get(0),
+    )?;
+    if admin_count == 0 {
+        conn.execute(
+            r#"UPDATE users
+               SET is_admin = 1
+               WHERE id = (
+                   SELECT id
+                   FROM users
+                   WHERE status = 'active'
+                   ORDER BY created_at ASC, rowid ASC
+                   LIMIT 1
+               )"#,
+            [],
+        )?;
     }
     Ok(())
 }

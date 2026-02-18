@@ -18,6 +18,7 @@ const MODE_INSTANT: &str = "instant";
 const MODE_HOURLY: &str = "hourly";
 const MODE_DAILY: &str = "daily";
 const MODE_WEEKLY: &str = "weekly";
+const MAX_CHAT_HISTORY_MESSAGES: usize = 600;
 
 pub(super) async fn chat_options() -> impl IntoResponse {
     StatusCode::NO_CONTENT
@@ -270,7 +271,7 @@ pub(super) async fn chat_completions(
             }
         }
 
-        let history_rows = match uds.list_messages_in(&conversation_id, 2000) {
+        let history_rows = match uds.list_messages_in(&conversation_id, MAX_CHAT_HISTORY_MESSAGES) {
             Ok(v) => v,
             Err(db::DbError::InvalidConversation) => {
                 return errors::openai_error(
@@ -338,6 +339,9 @@ pub(super) async fn chat_completions(
             s.to_string()
         }
     };
+    let chat_temperature = cfg
+        .resolve_agent("chat")
+        .and_then(|a| a.normalized_temperature());
     let memory_context = if let Some(text) = latest_user_content.clone() {
         memory::build_memory_context(
             st.data_dir.clone(),
@@ -354,7 +358,7 @@ pub(super) async fn chat_completions(
         model: backend_model.clone(),
         messages: Vec::with_capacity(history_messages.len() + 2),
         // Do not expose model controls over the public API (keep chat surface minimal and stable).
-        temperature: None,
+        temperature: chat_temperature,
         max_tokens: None,
         stream: req.stream,
     };
@@ -479,7 +483,7 @@ pub(super) async fn chat_history(
     };
 
     let limit = if q.limit == 0 {
-        2000usize
+        MAX_CHAT_HISTORY_MESSAGES
     } else {
         q.limit.min(10_000)
     };
@@ -753,7 +757,7 @@ pub(super) async fn thread_message(
     }
 
     let rows: Vec<db::ChatMessageRecord> = uds
-        .list_messages_in(&conversation_id, 2000)
+        .list_messages_in(&conversation_id, MAX_CHAT_HISTORY_MESSAGES)
         .unwrap_or_default();
     let (pending_count, _) = pending_after_last_saelora(&rows);
     (
@@ -816,7 +820,7 @@ pub(super) async fn tick_conversation(
             .into_response();
     }
 
-    let rows = match uds.list_messages_in(&conversation_id, 2000) {
+    let rows = match uds.list_messages_in(&conversation_id, MAX_CHAT_HISTORY_MESSAGES) {
         Ok(v) => v,
         Err(db::DbError::InvalidConversation) => {
             return errors::auth_error(StatusCode::BAD_REQUEST, "invalid conversation id");
@@ -908,6 +912,9 @@ pub(super) async fn tick_conversation(
             s.to_string()
         }
     };
+    let chat_temperature = cfg
+        .resolve_agent("chat")
+        .and_then(|a| a.normalized_temperature());
     let latest_user_text = rows
         .iter()
         .rev()
@@ -924,7 +931,7 @@ pub(super) async fn tick_conversation(
     let mut or_req = openrouter::ChatCompletionRequest {
         model: backend_model,
         messages: Vec::with_capacity(history_messages.len() + 2),
-        temperature: None,
+        temperature: chat_temperature,
         max_tokens: None,
         stream: false,
     };
