@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_agent_supports_memory_task_fallbacks() {
+    fn resolve_agent_supports_memory_task_fallback() {
         let mut s = default_settings();
         s.tasks.memory_agent.clear();
 

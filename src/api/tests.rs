@@ -577,6 +577,43 @@ async fn chat_history_returns_persisted_messages_for_user() {
 }
 
 #[tokio::test]
+async fn chat_history_limit_returns_latest_messages() {
+    let td = tempfile::tempdir().unwrap();
+    let data_dir = td.path().to_path_buf();
+    let st = test_state(&data_dir);
+
+    let (mgr, tok) =
+        register_whitelisted(st.clone(), "history_latest@example.com", "password123").await;
+    let us = mgr.users().unwrap();
+    let u = us.auth_user_from_token(&tok).unwrap();
+    let uds = mgr.user_data(&u.id).unwrap();
+
+    uds.append_user_message("m1").unwrap();
+    uds.append_saelora_message("m2").unwrap();
+    uds.append_user_message("m3").unwrap();
+    uds.append_saelora_message("m4").unwrap();
+
+    let resp = chat::chat_history(
+        State(st.clone()),
+        bearer_headers(&tok),
+        Query(chat::ChatHistoryQuery {
+            limit: 2,
+            conversation_id: String::new(),
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = resp_json(resp).await;
+    let msgs = v
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .expect("messages array");
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0].get("content").and_then(|c| c.as_str()), Some("m3"));
+    assert_eq!(msgs[1].get("content").and_then(|c| c.as_str()), Some("m4"));
+}
+
+#[tokio::test]
 async fn conversations_api_create_rename_archive_lifecycle() {
     let td = tempfile::tempdir().unwrap();
     let data_dir = td.path().to_path_buf();

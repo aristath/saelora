@@ -39,53 +39,21 @@ pub struct MessageEmbeddingRecord {
     pub embedding: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryStatementRecord {
-    pub id: i64,
-    pub text: String,
-    pub belief_score: f64,
-    pub salience: f64,
-    pub first_seen_message_id: i64,
-    pub last_seen_message_id: i64,
-    pub evidence_count: i64,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
 #[derive(Debug, Clone)]
-pub struct SemanticThreadMembershipRecord {
-    pub thread_id: i64,
-    pub score: f64,
-    pub is_primary: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct SemanticThreadRecord {
+pub struct ConversationSummaryRecord {
     pub id: i64,
+    pub conversation_id: i64,
+    pub start_message_id: i64,
+    pub end_message_id: i64,
+    pub next_start_message_id: i64,
     pub message_count: i64,
-    pub centroid: Vec<f32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SemanticPendingAnchorRecord {
-    pub message_id: i64,
-    pub embedding: Vec<f32>,
+    pub token_estimate: i64,
+    pub model: String,
+    pub content: String,
 }
 
 pub struct UserDataStore {
     conn: Connection,
-}
-
-pub struct MemoryPatch<'a> {
-    pub statement_id: i64,
-    pub model: &'a str,
-    pub text: &'a str,
-    pub delta: f64,
-    pub salience: f64,
-    pub confidence: f64,
-    pub message_id: i64,
-    pub note: &'a str,
-    pub embedding: &'a [f32],
 }
 
 impl UserDataStore {
@@ -373,6 +341,47 @@ impl UserDataStore {
         Ok(out)
     }
 
+    pub fn list_messages_for_conversation_from(
+        &self,
+        conversation_id: &str,
+        start_message_id: i64,
+        limit: usize,
+    ) -> Result<Vec<ChatMessageRecord>, DbError> {
+        let cid = normalize_or_default_conversation_id(conversation_id)?;
+        let start_id = if start_message_id <= 0 {
+            1_i64
+        } else {
+            start_message_id
+        };
+        let lim = if limit == 0 {
+            5000_i64
+        } else {
+            i64::try_from(limit).unwrap_or(i64::MAX)
+        };
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, conversation_id, role, content, created_at
+               FROM messages
+               WHERE conversation_id = ?1
+                 AND id >= ?2
+               ORDER BY id ASC
+               LIMIT ?3"#,
+        )?;
+        let rows = stmt.query_map(params![cid, start_id, lim], |r| {
+            Ok(ChatMessageRecord {
+                id: r.get::<_, i64>(0)?,
+                conversation_id: r.get::<_, i64>(1)?,
+                role: r.get::<_, String>(2)?,
+                content: r.get::<_, String>(3)?,
+                created_at: r.get::<_, i64>(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn upsert_message_embedding(
         &self,
         message_id: i64,
@@ -433,93 +442,152 @@ impl UserDataStore {
         }
     }
 
-    pub fn create_semantic_thread(&self, model: &str, centroid: &[f32]) -> Result<i64, DbError> {
-        if centroid.is_empty() {
+    pub fn latest_conversation_summary(
+        &self,
+        conversation_id: i64,
+    ) -> Result<Option<ConversationSummaryRecord>, DbError> {
+        if conversation_id <= 0 {
+            return Ok(None);
+        }
+        let mut stmt = self.conn.prepare(
+            r#"SELECT
+                   id, conversation_id, start_message_id, end_message_id,
+                   next_start_message_id, message_count, token_estimate, model, content
+               FROM conversation_summaries
+               WHERE conversation_id = ?1
+               ORDER BY end_message_id DESC, id DESC
+               LIMIT 1"#,
+        )?;
+        let row = stmt
+            .query_row(params![conversation_id], |r| {
+                Ok(ConversationSummaryRecord {
+                    id: r.get::<_, i64>(0)?,
+                    conversation_id: r.get::<_, i64>(1)?,
+                    start_message_id: r.get::<_, i64>(2)?,
+                    end_message_id: r.get::<_, i64>(3)?,
+                    next_start_message_id: r.get::<_, i64>(4)?,
+                    message_count: r.get::<_, i64>(5)?,
+                    token_estimate: r.get::<_, i64>(6)?,
+                    model: r.get::<_, String>(7)?,
+                    content: r.get::<_, String>(8)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn create_conversation_summary(
+        &self,
+        conversation_id: i64,
+        start_message_id: i64,
+        end_message_id: i64,
+        next_start_message_id: i64,
+        message_count: i64,
+        token_estimate: i64,
+        model: &str,
+        content: &str,
+    ) -> Result<i64, DbError> {
+        if conversation_id <= 0
+            || start_message_id <= 0
+            || end_message_id < start_message_id
+            || next_start_message_id <= start_message_id
+            || message_count <= 0
+            || token_estimate <= 0
+        {
             return Err(DbError::InvalidData(
-                "semantic thread centroid is empty".to_string(),
+                "invalid conversation summary bounds".to_string(),
             ));
         }
         let model = normalize_model(model)?;
-        let dims = i64::try_from(centroid.len()).unwrap_or(i64::MAX);
+        let content = normalize_conversation_summary_content(content)?;
         let now = now_ms();
-        self.conn.execute(
-            r#"INSERT INTO semantic_threads(
-                   model, dims, centroid, message_count, created_at, updated_at
-               ) VALUES (?1, ?2, ?3, 0, ?4, ?4)"#,
-            params![model.as_str(), dims, encode_embedding_blob(centroid), now],
-        )?;
-        Ok(self.conn.last_insert_rowid())
-    }
 
-    pub fn nearest_semantic_threads(
-        &self,
-        model: &str,
-        query_embedding: &[f32],
-        top_k: usize,
-        min_similarity: f64,
-    ) -> Result<Vec<(i64, f64)>, DbError> {
-        if query_embedding.is_empty() || top_k == 0 {
-            return Ok(Vec::new());
+        let tx = self.conn.unchecked_transaction()?;
+        let conv_exists = tx
+            .query_row(
+                "SELECT 1 FROM conversations WHERE id = ?1 LIMIT 1",
+                params![conversation_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !conv_exists {
+            return Err(DbError::NotFound);
         }
-        let model = normalize_model(model)?;
-        let dims = i64::try_from(query_embedding.len()).unwrap_or(i64::MAX);
-        let lim = i64::try_from(top_k.saturating_mul(80))
-            .unwrap_or(i64::MAX)
-            .max(400);
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, centroid
-               FROM semantic_threads
-               WHERE model = ?1 AND dims = ?2
-               ORDER BY updated_at DESC, id DESC
-               LIMIT ?3"#,
-        )?;
-        let rows = stmt.query_map(params![model.as_str(), dims, lim], |r| {
-            let id = r.get::<_, i64>(0)?;
-            let blob = r.get::<_, Vec<u8>>(1)?;
-            let centroid = decode_embedding_blob(&blob, query_embedding.len())?;
-            Ok((id, centroid))
-        })?;
-        let mut scored = Vec::new();
-        for row in rows {
-            let (id, centroid) = row?;
-            let sim = cosine_similarity(query_embedding, &centroid)
-                .clamp(-1.0, 1.0)
-                .max(0.0);
-            if sim >= min_similarity {
-                scored.push((id, sim));
-            }
-        }
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-        scored.truncate(top_k);
-        Ok(scored)
-    }
-
-    pub fn list_semantic_threads(
-        &self,
-        model: &str,
-        dims: usize,
-    ) -> Result<Vec<SemanticThreadRecord>, DbError> {
-        if dims == 0 {
-            return Ok(Vec::new());
-        }
-        let model = normalize_model(model)?;
-        let dims_i64 = i64::try_from(dims).unwrap_or(i64::MAX);
-        let mut stmt = self.conn.prepare(
-            r#"SELECT id, message_count, centroid
-               FROM semantic_threads
-               WHERE model = ?1 AND dims = ?2
-               ORDER BY id ASC"#,
-        )?;
-        let rows = stmt.query_map(params![model.as_str(), dims_i64], |r| {
-            let id = r.get::<_, i64>(0)?;
-            let message_count = r.get::<_, i64>(1)?;
-            let blob = r.get::<_, Vec<u8>>(2)?;
-            let centroid = decode_embedding_blob(&blob, dims)?;
-            Ok(SemanticThreadRecord {
-                id,
+        let changed = tx.execute(
+            r#"INSERT OR IGNORE INTO conversation_summaries(
+                   conversation_id, start_message_id, end_message_id, next_start_message_id,
+                   message_count, token_estimate, model, content, created_at, updated_at
+               ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)"#,
+            params![
+                conversation_id,
+                start_message_id,
+                end_message_id,
+                next_start_message_id,
                 message_count,
-                centroid,
-            })
+                token_estimate,
+                model.as_str(),
+                content.as_str(),
+                now
+            ],
+        )?;
+        let summary_id = if changed > 0 {
+            tx.last_insert_rowid()
+        } else {
+            let id = tx.query_row(
+                r#"SELECT id
+                   FROM conversation_summaries
+                   WHERE conversation_id = ?1
+                     AND start_message_id = ?2
+                     AND end_message_id = ?3
+                   LIMIT 1"#,
+                params![conversation_id, start_message_id, end_message_id],
+                |r| r.get::<_, i64>(0),
+            )?;
+            tx.execute(
+                r#"UPDATE conversation_summaries
+                   SET next_start_message_id = ?2,
+                       message_count = ?3,
+                       token_estimate = ?4,
+                       model = ?5,
+                       content = ?6,
+                       updated_at = ?7
+                   WHERE id = ?1"#,
+                params![
+                    id,
+                    next_start_message_id,
+                    message_count,
+                    token_estimate,
+                    model.as_str(),
+                    content.as_str(),
+                    now
+                ],
+            )?;
+            id
+        };
+        tx.commit()?;
+        Ok(summary_id)
+    }
+
+    pub fn list_conversation_summaries_without_embedding(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(i64, String)>, DbError> {
+        let lim = if limit == 0 {
+            100_i64
+        } else {
+            i64::try_from(limit).unwrap_or(i64::MAX)
+        };
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, content
+               FROM conversation_summaries
+               WHERE embedding IS NULL
+                 AND length(trim(content)) > 0
+               ORDER BY id ASC
+               LIMIT ?1"#,
+        )?;
+        let rows = stmt.query_map(params![lim], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
         })?;
         let mut out = Vec::new();
         for row in rows {
@@ -528,602 +596,104 @@ impl UserDataStore {
         Ok(out)
     }
 
-    pub fn upsert_semantic_pending_anchor(
+    pub fn upsert_conversation_summary_embedding(
         &self,
-        message_id: i64,
+        summary_id: i64,
         model: &str,
         embedding: &[f32],
     ) -> Result<(), DbError> {
-        if message_id <= 0 || embedding.is_empty() {
-            return Ok(());
+        if summary_id <= 0 {
+            return Err(DbError::InvalidData("invalid summary id".to_string()));
+        }
+        if embedding.is_empty() {
+            return Err(DbError::InvalidData(
+                "conversation summary embedding is empty".to_string(),
+            ));
         }
         let model = normalize_model(model)?;
         let dims = i64::try_from(embedding.len()).unwrap_or(i64::MAX);
         let now = now_ms();
-        self.conn.execute(
-            r#"INSERT INTO semantic_pending_anchors(
-                   message_id, model, dims, embedding, created_at, updated_at
-               ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-               ON CONFLICT(message_id) DO UPDATE SET
-                   model = excluded.model,
-                   dims = excluded.dims,
-                   embedding = excluded.embedding,
-                   updated_at = excluded.updated_at"#,
+        let changed = self.conn.execute(
+            r#"UPDATE conversation_summaries
+               SET embedding_model = ?2,
+                   embedding_dims = ?3,
+                   embedding = ?4,
+                   updated_at = CASE
+                       WHEN updated_at >= ?5 THEN updated_at
+                       ELSE ?5
+                   END
+               WHERE id = ?1"#,
             params![
-                message_id,
+                summary_id,
                 model.as_str(),
                 dims,
                 encode_embedding_blob(embedding),
                 now
             ],
         )?;
-        Ok(())
-    }
-
-    pub fn remove_semantic_pending_anchor(&self, message_id: i64) -> Result<(), DbError> {
-        if message_id <= 0 {
-            return Ok(());
+        if changed == 0 {
+            return Err(DbError::NotFound);
         }
-        self.conn.execute(
-            "DELETE FROM semantic_pending_anchors WHERE message_id = ?1",
-            params![message_id],
-        )?;
         Ok(())
     }
 
-    pub fn nearest_semantic_pending_anchor(
+    pub fn nearest_conversation_summaries_by_embedding(
         &self,
         model: &str,
         query_embedding: &[f32],
+        conversation_id: i64,
+        top_k: usize,
         min_similarity: f64,
-    ) -> Result<Option<(SemanticPendingAnchorRecord, f64)>, DbError> {
-        if query_embedding.is_empty() {
-            return Ok(None);
+    ) -> Result<Vec<(ConversationSummaryRecord, f64)>, DbError> {
+        if query_embedding.is_empty() || conversation_id <= 0 {
+            return Ok(Vec::new());
         }
         let model = normalize_model(model)?;
         let dims = i64::try_from(query_embedding.len()).unwrap_or(i64::MAX);
+        let lim = i64::try_from(top_k.max(1).saturating_mul(80))
+            .unwrap_or(i64::MAX)
+            .max(400);
         let mut stmt = self.conn.prepare(
-            r#"SELECT message_id, embedding
-               FROM semantic_pending_anchors
-               WHERE model = ?1 AND dims = ?2
-               ORDER BY message_id ASC"#,
+            r#"SELECT
+                   id, conversation_id, start_message_id, end_message_id,
+                   next_start_message_id, message_count, token_estimate, model, content, embedding
+               FROM conversation_summaries
+               WHERE conversation_id = ?1
+                 AND embedding_model = ?2
+                 AND embedding_dims = ?3
+                 AND embedding IS NOT NULL
+               ORDER BY end_message_id DESC, id DESC
+               LIMIT ?4"#,
         )?;
-        let rows = stmt.query_map(params![model.as_str(), dims], |r| {
-            let message_id = r.get::<_, i64>(0)?;
-            let blob = r.get::<_, Vec<u8>>(1)?;
-            let embedding = decode_embedding_blob(&blob, query_embedding.len())?;
-            Ok(SemanticPendingAnchorRecord {
-                message_id,
-                embedding,
-            })
-        })?;
-        let mut best: Option<(SemanticPendingAnchorRecord, f64)> = None;
-        for row in rows {
-            let rec = row?;
-            let sim = cosine_similarity(query_embedding, &rec.embedding)
-                .clamp(-1.0, 1.0)
-                .max(0.0);
-            if sim < min_similarity {
-                continue;
-            }
-            match best.as_ref() {
-                Some((best_rec, best_score)) => {
-                    if sim > *best_score
-                        || ((sim - *best_score).abs() < 1e-9
-                            && rec.message_id < best_rec.message_id)
-                    {
-                        best = Some((rec, sim));
-                    }
-                }
-                None => best = Some((rec, sim)),
-            }
-        }
-        Ok(best)
-    }
-
-    pub fn semantic_thread_memberships_for_message(
-        &self,
-        message_id: i64,
-        limit: usize,
-    ) -> Result<Vec<SemanticThreadMembershipRecord>, DbError> {
-        if message_id <= 0 {
-            return Ok(Vec::new());
-        }
-        let lim = if limit == 0 {
-            20_i64
-        } else {
-            i64::try_from(limit).unwrap_or(i64::MAX)
-        };
-        let mut stmt = self.conn.prepare(
-            r#"SELECT thread_id, score, is_primary
-               FROM semantic_thread_memberships
-               WHERE message_id = ?1
-               ORDER BY is_primary DESC, score DESC, thread_id ASC
-               LIMIT ?2"#,
-        )?;
-        let rows = stmt.query_map(params![message_id, lim], |r| {
-            Ok(SemanticThreadMembershipRecord {
-                thread_id: r.get::<_, i64>(0)?,
-                score: r.get::<_, f64>(1)?,
-                is_primary: r.get::<_, i64>(2)? != 0,
-            })
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    pub fn upsert_semantic_thread_membership(
-        &self,
-        thread_id: i64,
-        message_id: i64,
-        score: f64,
-        is_primary: bool,
-    ) -> Result<bool, DbError> {
-        if thread_id <= 0 || message_id <= 0 {
-            return Ok(false);
-        }
-        let now = now_ms();
-        let is_primary = if is_primary { 1_i64 } else { 0_i64 };
-        let score = clamp01(score);
-        let inserted = self.conn.execute(
-            r#"INSERT OR IGNORE INTO semantic_thread_memberships(
-                   thread_id, message_id, score, is_primary, created_at, updated_at
-               ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)"#,
-            params![thread_id, message_id, score, is_primary, now],
-        )?;
-        self.conn.execute(
-            r#"UPDATE semantic_thread_memberships
-               SET score = ?3,
-                   is_primary = ?4,
-                   updated_at = ?5
-               WHERE thread_id = ?1 AND message_id = ?2"#,
-            params![thread_id, message_id, score, is_primary, now],
-        )?;
-        Ok(inserted > 0)
-    }
-
-    pub fn increment_semantic_thread_centroid(
-        &self,
-        thread_id: i64,
-        embedding: &[f32],
-    ) -> Result<(), DbError> {
-        if thread_id <= 0 {
-            return Ok(());
-        }
-        if embedding.is_empty() {
-            return Err(DbError::InvalidData(
-                "semantic thread embedding is empty".to_string(),
-            ));
-        }
-        let mut stmt = self.conn.prepare(
-            r#"SELECT model, dims, centroid, message_count
-               FROM semantic_threads
-               WHERE id = ?1
-               LIMIT 1"#,
-        )?;
-        let row = stmt.query_row(params![thread_id], |r| {
+        let rows = stmt.query_map(params![conversation_id, model.as_str(), dims, lim], |r| {
+            let blob = r.get::<_, Vec<u8>>(9)?;
+            let emb = decode_embedding_blob(&blob, query_embedding.len())?;
             Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, Vec<u8>>(2)?,
-                r.get::<_, i64>(3)?,
+                ConversationSummaryRecord {
+                    id: r.get::<_, i64>(0)?,
+                    conversation_id: r.get::<_, i64>(1)?,
+                    start_message_id: r.get::<_, i64>(2)?,
+                    end_message_id: r.get::<_, i64>(3)?,
+                    next_start_message_id: r.get::<_, i64>(4)?,
+                    message_count: r.get::<_, i64>(5)?,
+                    token_estimate: r.get::<_, i64>(6)?,
+                    model: r.get::<_, String>(7)?,
+                    content: r.get::<_, String>(8)?,
+                },
+                emb,
             ))
-        });
-        let (_model, dims, blob, count) = match row {
-            Ok(v) => v,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Err(DbError::NotFound),
-            Err(e) => return Err(DbError::Sql(e)),
-        };
-        let dims_usize = usize::try_from(dims).unwrap_or(0);
-        if dims_usize == 0 || dims_usize != embedding.len() {
-            return Err(DbError::InvalidData(
-                "semantic thread dims mismatch".to_string(),
-            ));
-        }
-        let old = decode_embedding_blob(&blob, dims_usize).map_err(DbError::Sql)?;
-        let base = if count <= 0 { 0.0 } else { count as f64 };
-        let denom = base + 1.0;
-        let mut next = Vec::with_capacity(dims_usize);
-        for (a, b) in old.iter().zip(embedding.iter()) {
-            let v = ((f64::from(*a) * base) + f64::from(*b)) / denom;
-            next.push(v as f32);
-        }
-        let now = now_ms();
-        self.conn.execute(
-            r#"UPDATE semantic_threads
-               SET centroid = ?2,
-                   message_count = message_count + 1,
-                   updated_at = ?3
-               WHERE id = ?1"#,
-            params![thread_id, encode_embedding_blob(&next), now],
-        )?;
-        Ok(())
-    }
-
-    pub fn update_semantic_thread_centroids_batch(
-        &self,
-        updates: &[(i64, Vec<f32>, i64)],
-    ) -> Result<(), DbError> {
-        if updates.is_empty() {
-            return Ok(());
-        }
-        let now = now_ms();
-        let tx = self.conn.unchecked_transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                r#"UPDATE semantic_threads
-                   SET centroid = ?2,
-                       message_count = ?3,
-                       updated_at = ?4
-                   WHERE id = ?1"#,
-            )?;
-            for (thread_id, centroid, message_count) in updates {
-                if *thread_id <= 0 || centroid.is_empty() {
-                    continue;
-                }
-                stmt.execute(params![
-                    *thread_id,
-                    encode_embedding_blob(centroid),
-                    (*message_count).max(0),
-                    now
-                ])?;
+        })?;
+        let mut scored = Vec::new();
+        for row in rows {
+            let (summary, emb) = row?;
+            let sim = cosine_similarity(query_embedding, &emb);
+            if sim >= min_similarity {
+                scored.push((summary, sim));
             }
         }
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn upsert_semantic_thread_edge(
-        &self,
-        thread_a: i64,
-        thread_b: i64,
-        kind: &str,
-        strength: f64,
-    ) -> Result<(), DbError> {
-        if thread_a <= 0 || thread_b <= 0 || thread_a == thread_b {
-            return Ok(());
-        }
-        let (a, b) = if thread_a < thread_b {
-            (thread_a, thread_b)
-        } else {
-            (thread_b, thread_a)
-        };
-        let kind = normalize_semantic_edge_kind(kind);
-        let now = now_ms();
-        self.conn.execute(
-            r#"INSERT INTO semantic_thread_edges(
-                   thread_a_id, thread_b_id, kind, strength, created_at, updated_at
-               ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-               ON CONFLICT(thread_a_id, thread_b_id, kind) DO UPDATE SET
-                   strength = excluded.strength,
-                   updated_at = excluded.updated_at"#,
-            params![a, b, kind, clamp01(strength), now],
-        )?;
-        Ok(())
-    }
-
-    pub fn merge_semantic_threads(
-        &self,
-        target_thread_id: i64,
-        source_thread_id: i64,
-    ) -> Result<bool, DbError> {
-        if target_thread_id <= 0 || source_thread_id <= 0 || target_thread_id == source_thread_id {
-            return Ok(false);
-        }
-
-        let now = now_ms();
-        let tx = self.conn.unchecked_transaction()?;
-        let merged = (|| -> Result<bool, DbError> {
-            let mut thread_stmt = tx.prepare(
-                r#"SELECT model, dims, message_count, centroid
-                   FROM semantic_threads
-                   WHERE id = ?1
-                   LIMIT 1"#,
-            )?;
-            let target_row = thread_stmt
-                .query_row(params![target_thread_id], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, i64>(2)?,
-                        r.get::<_, Vec<u8>>(3)?,
-                    ))
-                })
-                .optional()?;
-            let source_row = thread_stmt
-                .query_row(params![source_thread_id], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, i64>(2)?,
-                        r.get::<_, Vec<u8>>(3)?,
-                    ))
-                })
-                .optional()?;
-            drop(thread_stmt);
-
-            let Some((target_model, target_dims, target_count, target_blob)) = target_row else {
-                return Ok(false);
-            };
-            let Some((source_model, source_dims, source_count, source_blob)) = source_row else {
-                return Ok(false);
-            };
-            if target_model != source_model || target_dims != source_dims || target_dims <= 0 {
-                return Ok(false);
-            }
-            let dims = usize::try_from(target_dims).unwrap_or(0);
-            if dims == 0 {
-                return Ok(false);
-            }
-            let target_centroid = decode_embedding_blob(&target_blob, dims)?;
-            let source_centroid = decode_embedding_blob(&source_blob, dims)?;
-
-            let target_base = target_count.max(0) as f64;
-            let source_base = source_count.max(0) as f64;
-            let total = (target_base + source_base).max(1.0);
-            let mut merged_centroid = Vec::with_capacity(dims);
-            for (a, b) in target_centroid.iter().zip(source_centroid.iter()) {
-                let v = ((f64::from(*a) * target_base) + (f64::from(*b) * source_base)) / total;
-                merged_centroid.push(v as f32);
-            }
-
-            let mut membership_stmt = tx.prepare(
-                r#"SELECT message_id, score, is_primary
-                   FROM semantic_thread_memberships
-                   WHERE thread_id = ?1
-                   ORDER BY message_id ASC"#,
-            )?;
-            let rows = membership_stmt.query_map(params![source_thread_id], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, f64>(1)?,
-                    r.get::<_, i64>(2)? != 0,
-                ))
-            })?;
-            let mut source_memberships: Vec<(i64, f64, bool)> = Vec::new();
-            for row in rows {
-                source_memberships.push(row?);
-            }
-            drop(membership_stmt);
-
-            for (message_id, source_score, source_primary) in source_memberships {
-                let existing = tx
-                    .query_row(
-                        r#"SELECT score, is_primary
-                           FROM semantic_thread_memberships
-                           WHERE thread_id = ?1 AND message_id = ?2
-                           LIMIT 1"#,
-                        params![target_thread_id, message_id],
-                        |r| Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)? != 0)),
-                    )
-                    .optional()?;
-                match existing {
-                    Some((target_score, target_primary)) => {
-                        let choose_source = source_score > target_score;
-                        let next_score = if choose_source {
-                            source_score
-                        } else {
-                            target_score
-                        };
-                        let next_primary = if choose_source {
-                            source_primary
-                        } else if (source_score - target_score).abs() < 1e-9 {
-                            source_primary || target_primary
-                        } else {
-                            target_primary
-                        };
-                        tx.execute(
-                            r#"UPDATE semantic_thread_memberships
-                               SET score = ?3,
-                                   is_primary = ?4,
-                                   updated_at = ?5
-                               WHERE thread_id = ?1 AND message_id = ?2"#,
-                            params![
-                                target_thread_id,
-                                message_id,
-                                clamp01(next_score),
-                                if next_primary { 1_i64 } else { 0_i64 },
-                                now
-                            ],
-                        )?;
-                    }
-                    None => {
-                        tx.execute(
-                            r#"INSERT INTO semantic_thread_memberships(
-                                   thread_id, message_id, score, is_primary, created_at, updated_at
-                               ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)"#,
-                            params![
-                                target_thread_id,
-                                message_id,
-                                clamp01(source_score),
-                                if source_primary { 1_i64 } else { 0_i64 },
-                                now
-                            ],
-                        )?;
-                    }
-                }
-            }
-
-            tx.execute(
-                "DELETE FROM semantic_thread_memberships WHERE thread_id = ?1",
-                params![source_thread_id],
-            )?;
-
-            let mut edge_stmt = tx.prepare(
-                r#"SELECT thread_a_id, thread_b_id, kind, strength
-                   FROM semantic_thread_edges
-                   WHERE thread_a_id = ?1 OR thread_b_id = ?1"#,
-            )?;
-            let edge_rows = edge_stmt.query_map(params![source_thread_id], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, f64>(3)?,
-                ))
-            })?;
-            let mut source_edges: Vec<(i64, i64, String, f64)> = Vec::new();
-            for row in edge_rows {
-                source_edges.push(row?);
-            }
-            drop(edge_stmt);
-
-            for (a, b, kind, strength) in source_edges {
-                let other = if a == source_thread_id { b } else { a };
-                if other <= 0 || other == target_thread_id {
-                    continue;
-                }
-                let (na, nb) = if target_thread_id < other {
-                    (target_thread_id, other)
-                } else {
-                    (other, target_thread_id)
-                };
-                tx.execute(
-                    r#"INSERT INTO semantic_thread_edges(
-                           thread_a_id, thread_b_id, kind, strength, created_at, updated_at
-                       ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-                       ON CONFLICT(thread_a_id, thread_b_id, kind) DO UPDATE SET
-                           strength = CASE
-                               WHEN excluded.strength > semantic_thread_edges.strength
-                               THEN excluded.strength
-                               ELSE semantic_thread_edges.strength
-                           END,
-                           updated_at = excluded.updated_at"#,
-                    params![na, nb, normalize_semantic_edge_kind(&kind), clamp01(strength), now],
-                )?;
-            }
-
-            tx.execute(
-                "DELETE FROM semantic_thread_edges WHERE thread_a_id = ?1 OR thread_b_id = ?1",
-                params![source_thread_id],
-            )?;
-
-            let merged_count: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM semantic_thread_memberships WHERE thread_id = ?1 AND is_primary = 1",
-                params![target_thread_id],
-                |r| r.get(0),
-            )?;
-            tx.execute(
-                r#"UPDATE semantic_threads
-                   SET centroid = ?2,
-                       message_count = ?3,
-                       updated_at = ?4
-                   WHERE id = ?1"#,
-                params![
-                    target_thread_id,
-                    encode_embedding_blob(&merged_centroid),
-                    merged_count.max(0),
-                    now
-                ],
-            )?;
-            tx.execute(
-                "DELETE FROM semantic_threads WHERE id = ?1",
-                params![source_thread_id],
-            )?;
-            Ok(true)
-        })()?;
-
-        if merged {
-            tx.commit()?;
-        }
-        Ok(merged)
-    }
-
-    pub fn list_memory_statements(
-        &self,
-        limit: usize,
-        model: Option<&str>,
-        conversation_id: Option<i64>,
-    ) -> Result<Vec<MemoryStatementRecord>, DbError> {
-        let lim = if limit == 0 {
-            500_i64
-        } else {
-            i64::try_from(limit).unwrap_or(i64::MAX)
-        };
-        let mut out = Vec::new();
-        let model = model.map(str::trim).filter(|m| !m.is_empty());
-        match (model, conversation_id) {
-            (Some(model), Some(cid)) => {
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT
-                           id, text, belief_score, salience,
-                           first_seen_message_id, last_seen_message_id,
-                           evidence_count, created_at, updated_at
-                       FROM memory_statements AS s
-                       WHERE s.model = ?1
-                         AND EXISTS (
-                           SELECT 1
-                           FROM memory_statement_evidence AS e
-                           JOIN messages AS m ON m.id = e.message_id
-                           WHERE e.statement_id = s.id AND m.conversation_id = ?2
-                           LIMIT 1
-                         )
-                       ORDER BY updated_at DESC, id DESC
-                       LIMIT ?3"#,
-                )?;
-                let rows = stmt.query_map(params![model, cid, lim], map_memory_statement_row)?;
-                for row in rows {
-                    out.push(row?);
-                }
-            }
-            (Some(model), None) => {
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT
-                           id, text, belief_score, salience,
-                           first_seen_message_id, last_seen_message_id,
-                           evidence_count, created_at, updated_at
-                       FROM memory_statements
-                       WHERE model = ?1
-                       ORDER BY updated_at DESC, id DESC
-                       LIMIT ?2"#,
-                )?;
-                let rows = stmt.query_map(params![model, lim], map_memory_statement_row)?;
-                for row in rows {
-                    out.push(row?);
-                }
-            }
-            (None, Some(cid)) => {
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT
-                           id, text, belief_score, salience,
-                           first_seen_message_id, last_seen_message_id,
-                           evidence_count, created_at, updated_at
-                       FROM memory_statements AS s
-                       WHERE EXISTS (
-                           SELECT 1
-                           FROM memory_statement_evidence AS e
-                           JOIN messages AS m ON m.id = e.message_id
-                           WHERE e.statement_id = s.id AND m.conversation_id = ?1
-                           LIMIT 1
-                       )
-                       ORDER BY updated_at DESC, id DESC
-                       LIMIT ?2"#,
-                )?;
-                let rows = stmt.query_map(params![cid, lim], map_memory_statement_row)?;
-                for row in rows {
-                    out.push(row?);
-                }
-            }
-            (None, None) => {
-                let mut stmt = self.conn.prepare(
-                    r#"SELECT
-                           id, text, belief_score, salience,
-                           first_seen_message_id, last_seen_message_id,
-                           evidence_count, created_at, updated_at
-                       FROM memory_statements
-                       ORDER BY updated_at DESC, id DESC
-                       LIMIT ?1"#,
-                )?;
-                let rows = stmt.query_map(params![lim], map_memory_statement_row)?;
-                for row in rows {
-                    out.push(row?);
-                }
-            }
-        }
-        Ok(out)
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.truncate(top_k.max(1));
+        Ok(scored)
     }
 
     pub fn nearest_messages_by_embedding(
@@ -1241,32 +811,12 @@ impl UserDataStore {
                     params![message_id],
                     |_| Ok(()),
                 );
-                let has_membership = self.conn.query_row(
-                    "SELECT 1 FROM semantic_thread_memberships WHERE message_id = ?1 LIMIT 1",
-                    params![message_id],
-                    |_| Ok(()),
-                );
-                let has_pending_anchor = self.conn.query_row(
-                    "SELECT 1 FROM semantic_pending_anchors WHERE message_id = ?1 LIMIT 1",
-                    params![message_id],
-                    |_| Ok(()),
-                );
                 let has_embedding = match has_embedding {
                     Ok(()) => true,
                     Err(rusqlite::Error::QueryReturnedNoRows) => false,
                     Err(e) => return Err(DbError::Sql(e)),
                 };
-                let has_membership = match has_membership {
-                    Ok(()) => true,
-                    Err(rusqlite::Error::QueryReturnedNoRows) => false,
-                    Err(e) => return Err(DbError::Sql(e)),
-                };
-                let has_pending_anchor = match has_pending_anchor {
-                    Ok(()) => true,
-                    Err(rusqlite::Error::QueryReturnedNoRows) => false,
-                    Err(e) => return Err(DbError::Sql(e)),
-                };
-                if has_embedding && (has_membership || has_pending_anchor) {
+                if has_embedding {
                     return Ok(false);
                 }
                 let changed = self.conn.execute(
@@ -1367,24 +917,7 @@ impl UserDataStore {
                    m.embed_status IS NULL
                    OR m.embed_status = 'queued'
                    OR (m.embed_status = 'failed' AND COALESCE(m.embed_attempts, 0) < ?1)
-                   OR (
-                     m.embed_status = 'done'
-                     AND (
-                       m.embedding IS NULL
-                       OR NOT EXISTS (
-                         SELECT 1
-                         FROM semantic_thread_memberships AS st
-                         WHERE st.message_id = m.id
-                         LIMIT 1
-                       )
-                       AND NOT EXISTS (
-                         SELECT 1
-                         FROM semantic_pending_anchors AS pa
-                         WHERE pa.message_id = m.id
-                         LIMIT 1
-                       )
-                     )
-                   )
+                   OR (m.embed_status = 'done' AND m.embedding IS NULL)
                  )
                ORDER BY m.id ASC
                LIMIT 1"#,
@@ -1445,243 +978,6 @@ impl UserDataStore {
             out.push(row?);
         }
         Ok(out)
-    }
-
-    pub fn nearest_memory_statements(
-        &self,
-        model: &str,
-        query_embedding: &[f32],
-        top_k: usize,
-        conversation_id: Option<i64>,
-    ) -> Result<Vec<(MemoryStatementRecord, f64)>, DbError> {
-        if query_embedding.is_empty() || top_k == 0 {
-            return Ok(Vec::new());
-        }
-        let model = normalize_model(model)?;
-        let dims = i64::try_from(query_embedding.len()).unwrap_or(i64::MAX);
-        let lim = i64::try_from(top_k.saturating_mul(80))
-            .unwrap_or(i64::MAX)
-            .max(400);
-        let mut scored = Vec::new();
-        if let Some(cid) = conversation_id {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT
-                       s.id, s.text, s.belief_score, s.salience,
-                       s.first_seen_message_id, s.last_seen_message_id,
-                       s.evidence_count, s.embedding, s.created_at, s.updated_at
-                   FROM memory_statements AS s
-                   WHERE s.model = ?1
-                     AND s.dims = ?2
-                     AND EXISTS (
-                         SELECT 1
-                         FROM memory_statement_evidence AS e
-                         JOIN messages AS m ON m.id = e.message_id
-                         WHERE e.statement_id = s.id AND m.conversation_id = ?3
-                         LIMIT 1
-                     )
-                   ORDER BY s.updated_at DESC, s.id DESC
-                   LIMIT ?4"#,
-            )?;
-            let rows = stmt.query_map(params![model.as_str(), dims, cid, lim], |r| {
-                let blob = r.get::<_, Vec<u8>>(7)?;
-                let emb = decode_embedding_blob(&blob, query_embedding.len())?;
-                let rec = MemoryStatementRecord {
-                    id: r.get::<_, i64>(0)?,
-                    text: r.get::<_, String>(1)?,
-                    belief_score: r.get::<_, f64>(2)?,
-                    salience: r.get::<_, f64>(3)?,
-                    first_seen_message_id: r.get::<_, i64>(4)?,
-                    last_seen_message_id: r.get::<_, i64>(5)?,
-                    evidence_count: r.get::<_, i64>(6)?,
-                    created_at: r.get::<_, i64>(8)?,
-                    updated_at: r.get::<_, i64>(9)?,
-                };
-                Ok((rec, emb))
-            })?;
-            for row in rows {
-                let (rec, emb) = row?;
-                let sim = cosine_similarity(query_embedding, &emb).clamp(-1.0, 1.0);
-                let distance = 1.0 - sim.max(0.0);
-                scored.push((rec, distance));
-            }
-        } else {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT
-                       id, text, belief_score, salience,
-                       first_seen_message_id, last_seen_message_id,
-                       evidence_count, embedding, created_at, updated_at
-                   FROM memory_statements
-                   WHERE model = ?1 AND dims = ?2
-                   ORDER BY updated_at DESC, id DESC
-                   LIMIT ?3"#,
-            )?;
-            let rows = stmt.query_map(params![model.as_str(), dims, lim], |r| {
-                let blob = r.get::<_, Vec<u8>>(7)?;
-                let emb = decode_embedding_blob(&blob, query_embedding.len())?;
-                let rec = MemoryStatementRecord {
-                    id: r.get::<_, i64>(0)?,
-                    text: r.get::<_, String>(1)?,
-                    belief_score: r.get::<_, f64>(2)?,
-                    salience: r.get::<_, f64>(3)?,
-                    first_seen_message_id: r.get::<_, i64>(4)?,
-                    last_seen_message_id: r.get::<_, i64>(5)?,
-                    evidence_count: r.get::<_, i64>(6)?,
-                    created_at: r.get::<_, i64>(8)?,
-                    updated_at: r.get::<_, i64>(9)?,
-                };
-                Ok((rec, emb))
-            })?;
-            for row in rows {
-                let (rec, emb) = row?;
-                let sim = cosine_similarity(query_embedding, &emb).clamp(-1.0, 1.0);
-                let distance = 1.0 - sim.max(0.0);
-                scored.push((rec, distance));
-            }
-        }
-        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-        scored.truncate(top_k);
-        Ok(scored)
-    }
-
-    pub fn apply_memory_patch(&self, patch: MemoryPatch<'_>) -> Result<i64, DbError> {
-        let model = normalize_model(patch.model)?;
-        if patch.embedding.is_empty() {
-            return Err(DbError::InvalidData("empty embedding".to_string()));
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        let now = now_ms();
-        let mut statement_id = patch.statement_id;
-        let dims = i64::try_from(patch.embedding.len()).unwrap_or(i64::MAX);
-        if statement_id <= 0 {
-            let text = normalize_memory_text(patch.text)?;
-            let sal = clamp01(patch.salience);
-            let score = clamp_score(patch.delta);
-            tx.execute(
-                r#"INSERT INTO memory_statements(
-                       model, text, belief_score, salience, first_seen_message_id, last_seen_message_id,
-                       evidence_count, dims, embedding, created_at, updated_at
-                   ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, ?7, ?8, ?8)"#,
-                params![
-                    model.as_str(),
-                    text,
-                    score,
-                    sal,
-                    patch.message_id,
-                    dims,
-                    encode_embedding_blob(patch.embedding),
-                    now
-                ],
-            )?;
-            statement_id = tx.last_insert_rowid();
-        } else {
-            tx.execute(
-                r#"UPDATE memory_statements
-                   SET model = ?1,
-                       belief_score = MIN(50.0, MAX(-50.0, belief_score + ?2)),
-                       salience = MIN(1.0, MAX(0.0, ?3)),
-                       last_seen_message_id = ?4,
-                       evidence_count = evidence_count + 1,
-                       dims = ?5,
-                       embedding = ?6,
-                       updated_at = ?7
-                   WHERE id = ?8"#,
-                params![
-                    model.as_str(),
-                    patch.delta,
-                    clamp01(patch.salience),
-                    patch.message_id,
-                    dims,
-                    encode_embedding_blob(patch.embedding),
-                    now,
-                    statement_id,
-                ],
-            )?;
-            if tx.changes() == 0 {
-                return Err(DbError::NotFound);
-            }
-        }
-
-        tx.execute(
-            r#"INSERT INTO memory_statement_evidence(
-                   statement_id, message_id, delta, confidence, note, created_at
-               ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
-            params![
-                statement_id,
-                patch.message_id,
-                patch.delta,
-                clamp01(patch.confidence),
-                patch.note.trim(),
-                now
-            ],
-        )?;
-        tx.commit()?;
-        Ok(statement_id)
-    }
-
-    pub fn upsert_memory_link(
-        &self,
-        statement_a: i64,
-        statement_b: i64,
-        kind: &str,
-        strength: f64,
-    ) -> Result<(), DbError> {
-        if statement_a <= 0 || statement_b <= 0 || statement_a == statement_b {
-            return Ok(());
-        }
-        let (a, b) = if statement_a < statement_b {
-            (statement_a, statement_b)
-        } else {
-            (statement_b, statement_a)
-        };
-        let now = now_ms();
-        self.conn.execute(
-            r#"INSERT INTO memory_statement_links(
-                   statement_a_id, statement_b_id, kind, strength, updated_at
-               ) VALUES (?1, ?2, ?3, ?4, ?5)
-               ON CONFLICT(statement_a_id, statement_b_id, kind) DO UPDATE SET
-                   strength = excluded.strength,
-                   updated_at = excluded.updated_at"#,
-            params![a, b, kind.trim(), clamp01(strength), now],
-        )?;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub fn count_memory_links(&self) -> Result<i64, DbError> {
-        let n = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM memory_statement_links", [], |r| {
-                r.get(0)
-            })?;
-        Ok(n)
-    }
-
-    #[cfg(test)]
-    pub fn count_semantic_threads(&self) -> Result<i64, DbError> {
-        let n = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM semantic_threads", [], |r| r.get(0))?;
-        Ok(n)
-    }
-
-    #[cfg(test)]
-    pub fn count_semantic_thread_memberships(&self) -> Result<i64, DbError> {
-        let n = self.conn.query_row(
-            "SELECT COUNT(*) FROM semantic_thread_memberships",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(n)
-    }
-
-    #[cfg(test)]
-    pub fn count_semantic_thread_edges(&self) -> Result<i64, DbError> {
-        let n = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM semantic_thread_edges", [], |r| {
-                r.get(0)
-            })?;
-        Ok(n)
     }
 
     fn append_message(
@@ -1778,106 +1074,28 @@ fn init_schema(conn: &mut Connection) -> Result<(), DbError> {
            ON conversations(updated_at DESC);"#,
         r#"CREATE INDEX IF NOT EXISTS conversations_archived_idx
            ON conversations(archived_at);"#,
-        r#"CREATE TABLE IF NOT EXISTS semantic_threads (
+        r#"CREATE TABLE IF NOT EXISTS conversation_summaries (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
+               conversation_id INTEGER NOT NULL,
+               start_message_id INTEGER NOT NULL,
+               end_message_id INTEGER NOT NULL,
+               next_start_message_id INTEGER NOT NULL,
+               message_count INTEGER NOT NULL,
+               token_estimate INTEGER NOT NULL,
                model TEXT NOT NULL,
-               dims INTEGER NOT NULL,
-               centroid BLOB NOT NULL,
-               message_count INTEGER NOT NULL DEFAULT 0,
-               created_at INTEGER NOT NULL,
-               updated_at INTEGER NOT NULL
-           );"#,
-        r#"CREATE INDEX IF NOT EXISTS semantic_threads_model_dims_updated_idx
-           ON semantic_threads(model, dims, updated_at DESC, id DESC);"#,
-        r#"CREATE TABLE IF NOT EXISTS semantic_thread_memberships (
-               thread_id INTEGER NOT NULL,
-               message_id INTEGER NOT NULL,
-               score REAL NOT NULL,
-               is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
+               content TEXT NOT NULL,
+               embedding_model TEXT,
+               embedding_dims INTEGER,
+               embedding BLOB,
                created_at INTEGER NOT NULL,
                updated_at INTEGER NOT NULL,
-               PRIMARY KEY(thread_id, message_id),
-               FOREIGN KEY(thread_id) REFERENCES semantic_threads(id) ON DELETE CASCADE,
-               FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+               UNIQUE(conversation_id, start_message_id, end_message_id),
+               FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
            );"#,
-        r#"CREATE INDEX IF NOT EXISTS semantic_thread_memberships_message_idx
-           ON semantic_thread_memberships(message_id, is_primary DESC, score DESC, thread_id);"#,
-        r#"CREATE INDEX IF NOT EXISTS semantic_thread_memberships_thread_idx
-           ON semantic_thread_memberships(thread_id, score DESC, message_id);"#,
-        r#"CREATE TABLE IF NOT EXISTS semantic_thread_edges (
-               thread_a_id INTEGER NOT NULL,
-               thread_b_id INTEGER NOT NULL,
-               kind TEXT NOT NULL CHECK(kind IN ('supports','conflicts','related')),
-               strength REAL NOT NULL,
-               created_at INTEGER NOT NULL,
-               updated_at INTEGER NOT NULL,
-               PRIMARY KEY(thread_a_id, thread_b_id, kind),
-               CHECK(thread_a_id < thread_b_id),
-               FOREIGN KEY(thread_a_id) REFERENCES semantic_threads(id) ON DELETE CASCADE,
-               FOREIGN KEY(thread_b_id) REFERENCES semantic_threads(id) ON DELETE CASCADE
-           );"#,
-        r#"CREATE INDEX IF NOT EXISTS semantic_thread_edges_strength_idx
-           ON semantic_thread_edges(strength DESC, updated_at DESC, thread_a_id, thread_b_id);"#,
-        r#"CREATE TABLE IF NOT EXISTS semantic_pending_anchors (
-               message_id INTEGER PRIMARY KEY,
-               model TEXT NOT NULL,
-               dims INTEGER NOT NULL,
-               embedding BLOB NOT NULL,
-               created_at INTEGER NOT NULL,
-               updated_at INTEGER NOT NULL,
-               FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
-           );"#,
-        r#"CREATE INDEX IF NOT EXISTS semantic_pending_anchors_model_dims_idx
-           ON semantic_pending_anchors(model, dims, updated_at DESC, message_id);"#,
-        r#"CREATE TABLE IF NOT EXISTS memory_statements (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               model TEXT NOT NULL,
-               text TEXT NOT NULL,
-               belief_score REAL NOT NULL DEFAULT 0.0,
-               salience REAL NOT NULL DEFAULT 0.5,
-               first_seen_message_id INTEGER NOT NULL,
-               last_seen_message_id INTEGER NOT NULL,
-               evidence_count INTEGER NOT NULL DEFAULT 0,
-               dims INTEGER NOT NULL,
-               embedding BLOB NOT NULL,
-               created_at INTEGER NOT NULL,
-               updated_at INTEGER NOT NULL,
-               FOREIGN KEY(first_seen_message_id) REFERENCES messages(id) ON DELETE CASCADE,
-               FOREIGN KEY(last_seen_message_id) REFERENCES messages(id) ON DELETE CASCADE
-           );"#,
-        r#"CREATE INDEX IF NOT EXISTS memory_statements_updated_idx
-           ON memory_statements(updated_at DESC, id DESC);"#,
-        r#"CREATE INDEX IF NOT EXISTS memory_statements_model_updated_idx
-           ON memory_statements(model, updated_at DESC, id DESC);"#,
-        r#"CREATE INDEX IF NOT EXISTS memory_statements_model_dims_updated_idx
-           ON memory_statements(model, dims, updated_at DESC, id DESC);"#,
-        r#"CREATE TABLE IF NOT EXISTS memory_statement_evidence (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               statement_id INTEGER NOT NULL,
-               message_id INTEGER NOT NULL,
-               delta REAL NOT NULL,
-               confidence REAL NOT NULL,
-               note TEXT NOT NULL DEFAULT '',
-               created_at INTEGER NOT NULL,
-               FOREIGN KEY(statement_id) REFERENCES memory_statements(id) ON DELETE CASCADE,
-               FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
-           );"#,
-        r#"CREATE INDEX IF NOT EXISTS memory_evidence_statement_idx
-           ON memory_statement_evidence(statement_id, id DESC);"#,
-        r#"CREATE INDEX IF NOT EXISTS memory_evidence_message_idx
-           ON memory_statement_evidence(message_id, id DESC);"#,
-        r#"CREATE TABLE IF NOT EXISTS memory_statement_links (
-               statement_a_id INTEGER NOT NULL,
-               statement_b_id INTEGER NOT NULL,
-               kind TEXT NOT NULL,
-               strength REAL NOT NULL,
-               updated_at INTEGER NOT NULL,
-               PRIMARY KEY(statement_a_id, statement_b_id, kind),
-               FOREIGN KEY(statement_a_id) REFERENCES memory_statements(id) ON DELETE CASCADE,
-               FOREIGN KEY(statement_b_id) REFERENCES memory_statements(id) ON DELETE CASCADE
-           );"#,
-        r#"CREATE INDEX IF NOT EXISTS memory_links_strength_idx
-           ON memory_statement_links(strength DESC, updated_at DESC);"#,
+        r#"CREATE INDEX IF NOT EXISTS conversation_summaries_conv_end_idx
+           ON conversation_summaries(conversation_id, end_message_id DESC, id DESC);"#,
+        r#"CREATE INDEX IF NOT EXISTS conversation_summaries_embedding_lookup_idx
+           ON conversation_summaries(conversation_id, embedding_model, embedding_dims, id DESC);"#,
     ];
     for s in stmts {
         conn.execute_batch(s)?;
@@ -1894,6 +1112,17 @@ fn init_schema(conn: &mut Connection) -> Result<(), DbError> {
     migrate_legacy_embedding_tables(conn)?;
     conn.execute_batch(
         r#"
+        DROP TABLE IF EXISTS thread_tags;
+        DROP TABLE IF EXISTS tag_pipeline_state;
+        DROP TABLE IF EXISTS thread_summary_sources;
+        DROP TABLE IF EXISTS thread_summaries;
+        DROP TABLE IF EXISTS semantic_thread_edges;
+        DROP TABLE IF EXISTS semantic_thread_memberships;
+        DROP TABLE IF EXISTS semantic_pending_anchors;
+        DROP TABLE IF EXISTS semantic_threads;
+        DROP TABLE IF EXISTS memory_statement_links;
+        DROP TABLE IF EXISTS memory_statement_evidence;
+        DROP TABLE IF EXISTS memory_statements;
         DROP TABLE IF EXISTS message_embeddings;
         DROP TABLE IF EXISTS message_memory_ingest;
         "#,
@@ -2106,20 +1335,6 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, DbError> {
     Ok(exists)
 }
 
-fn map_memory_statement_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryStatementRecord> {
-    Ok(MemoryStatementRecord {
-        id: r.get::<_, i64>(0)?,
-        text: r.get::<_, String>(1)?,
-        belief_score: r.get::<_, f64>(2)?,
-        salience: r.get::<_, f64>(3)?,
-        first_seen_message_id: r.get::<_, i64>(4)?,
-        last_seen_message_id: r.get::<_, i64>(5)?,
-        evidence_count: r.get::<_, i64>(6)?,
-        created_at: r.get::<_, i64>(7)?,
-        updated_at: r.get::<_, i64>(8)?,
-    })
-}
-
 fn normalize_or_default_conversation_id(conversation_id: &str) -> Result<i64, DbError> {
     let cid = conversation_id.trim();
     if cid.is_empty() {
@@ -2174,42 +1389,16 @@ fn normalize_model(model: &str) -> Result<String, DbError> {
     Ok(out)
 }
 
-fn normalize_memory_text(text: &str) -> Result<String, DbError> {
-    let t = text.trim();
-    if t.is_empty() {
-        return Err(DbError::InvalidData(
-            "memory statement text is empty".to_string(),
-        ));
+fn normalize_conversation_summary_content(content: &str) -> Result<String, DbError> {
+    let c = content.trim();
+    if c.is_empty() {
+        return Err(DbError::InvalidData("summary content is empty".to_string()));
     }
-    let out: String = t.chars().take(400).collect();
+    let out: String = c.chars().take(12_000).collect();
     if out.trim().is_empty() {
-        return Err(DbError::InvalidData(
-            "memory statement text is empty".to_string(),
-        ));
+        return Err(DbError::InvalidData("summary content is empty".to_string()));
     }
     Ok(out)
-}
-
-fn normalize_semantic_edge_kind(kind: &str) -> &'static str {
-    match kind.trim().to_ascii_lowercase().as_str() {
-        "supports" => "supports",
-        "conflicts" => "conflicts",
-        _ => "related",
-    }
-}
-
-fn clamp01(v: f64) -> f64 {
-    if !v.is_finite() {
-        return 0.0;
-    }
-    v.clamp(0.0, 1.0)
-}
-
-fn clamp_score(v: f64) -> f64 {
-    if !v.is_finite() {
-        return 0.0;
-    }
-    v.clamp(-50.0, 50.0)
 }
 
 fn encode_embedding_blob(v: &[f32]) -> Vec<u8> {

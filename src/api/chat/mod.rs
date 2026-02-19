@@ -19,6 +19,9 @@ const MODE_HOURLY: &str = "hourly";
 const MODE_DAILY: &str = "daily";
 const MODE_WEEKLY: &str = "weekly";
 const MAX_CHAT_HISTORY_MESSAGES: usize = 600;
+const CHAT_REQUEST_PRIOR_MESSAGES: usize = 20;
+const CHAT_REQUEST_RECENT_MESSAGES: usize = CHAT_REQUEST_PRIOR_MESSAGES + 1;
+const THREAD_STATUS_LOOKBACK_MESSAGES: usize = 2_000;
 
 pub(super) async fn chat_options() -> impl IntoResponse {
     StatusCode::NO_CONTENT
@@ -86,6 +89,36 @@ fn mode_interval_ms(mode: &str) -> Option<i64> {
         MODE_WEEKLY => Some(7 * 24 * 60 * 60 * 1000),
         _ => None,
     }
+}
+
+fn map_message_role_for_llm(role: &str) -> Option<&'static str> {
+    if role == "saelora" {
+        Some("assistant")
+    } else if role == "user" {
+        Some("user")
+    } else {
+        None
+    }
+}
+
+fn build_llm_history_messages(
+    rows: &[db::ChatMessageRecord],
+    max_messages: usize,
+) -> Vec<openrouter::Message> {
+    let mut out = rows
+        .iter()
+        .rev()
+        .filter_map(|m| {
+            let role = map_message_role_for_llm(&m.role)?;
+            Some(openrouter::Message {
+                role: role.to_string(),
+                content: m.content.clone(),
+            })
+        })
+        .take(max_messages.max(1))
+        .collect::<Vec<_>>();
+    out.reverse();
+    out
 }
 
 fn pending_after_last_saelora(rows: &[db::ChatMessageRecord]) -> (usize, Option<i64>) {
@@ -271,7 +304,11 @@ pub(super) async fn chat_completions(
             }
         }
 
-        let history_rows = match uds.list_messages_in(&conversation_id, MAX_CHAT_HISTORY_MESSAGES) {
+        let history_rows = match uds.list_recent_messages_for_conversation_up_to(
+            &conversation_id,
+            CHAT_REQUEST_RECENT_MESSAGES,
+            None,
+        ) {
             Ok(v) => v,
             Err(db::DbError::InvalidConversation) => {
                 return errors::openai_error(
@@ -291,22 +328,7 @@ pub(super) async fn chat_completions(
                 );
             }
         };
-        history_rows
-            .into_iter()
-            .filter_map(|m| {
-                let role = if m.role == "saelora" {
-                    "assistant"
-                } else if m.role == "user" {
-                    "user"
-                } else {
-                    return None;
-                };
-                Some(openrouter::Message {
-                    role: role.to_string(),
-                    content: m.content,
-                })
-            })
-            .collect()
+        build_llm_history_messages(&history_rows, CHAT_REQUEST_RECENT_MESSAGES)
     };
 
     if let Some(message_id) = appended_user_message_id {
@@ -496,13 +518,17 @@ pub(super) async fn chat_history(
             return errors::auth_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load history");
         }
     };
-    let rows = match uds.list_messages_in(&q.conversation_id, limit) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(err=%e, user_id=%u.id, "chat_history: list failed");
-            return errors::auth_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to load history");
-        }
-    };
+    let rows =
+        match uds.list_recent_messages_for_conversation_up_to(&q.conversation_id, limit, None) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(err=%e, user_id=%u.id, "chat_history: list failed");
+                return errors::auth_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load history",
+                );
+            }
+        };
 
     let messages: Vec<serde_json::Value> = rows
         .into_iter()
@@ -757,7 +783,11 @@ pub(super) async fn thread_message(
     }
 
     let rows: Vec<db::ChatMessageRecord> = uds
-        .list_messages_in(&conversation_id, MAX_CHAT_HISTORY_MESSAGES)
+        .list_recent_messages_for_conversation_up_to(
+            &conversation_id,
+            THREAD_STATUS_LOOKBACK_MESSAGES,
+            None,
+        )
         .unwrap_or_default();
     let (pending_count, _) = pending_after_last_saelora(&rows);
     (
@@ -820,7 +850,11 @@ pub(super) async fn tick_conversation(
             .into_response();
     }
 
-    let rows = match uds.list_messages_in(&conversation_id, MAX_CHAT_HISTORY_MESSAGES) {
+    let rows = match uds.list_recent_messages_for_conversation_up_to(
+        &conversation_id,
+        THREAD_STATUS_LOOKBACK_MESSAGES,
+        None,
+    ) {
         Ok(v) => v,
         Err(db::DbError::InvalidConversation) => {
             return errors::auth_error(StatusCode::BAD_REQUEST, "invalid conversation id");
@@ -868,22 +902,7 @@ pub(super) async fn tick_conversation(
         }
     }
 
-    let history_messages: Vec<openrouter::Message> = rows
-        .iter()
-        .filter_map(|m| {
-            let role = if m.role == "saelora" {
-                "assistant"
-            } else if m.role == "user" {
-                "user"
-            } else {
-                return None;
-            };
-            Some(openrouter::Message {
-                role: role.to_string(),
-                content: m.content.clone(),
-            })
-        })
-        .collect();
+    let history_messages = build_llm_history_messages(&rows, CHAT_REQUEST_RECENT_MESSAGES);
     if history_messages.is_empty() {
         return (
             StatusCode::OK,
